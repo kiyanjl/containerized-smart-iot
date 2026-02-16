@@ -1,0 +1,36 @@
+{
+  "broker": "mqtt-broker",
+  "port": 1883,
+  "assets": [
+    {
+      "asset_id": "warehouse_cold",
+      "mqtt_sensor_topic": "assets/warehouse_cold/sensors",
+      "mqtt_actuator_topic": "assets/warehouse_cold/actuators",
+      "rules": {
+        "temp_warning": 8,
+        "temp_critical": 12,
+        "stock_low": 50
+      }
+    },
+    {
+      "asset_id": "warehouse_standard",
+      "mqtt_sensor_topic": "assets/warehouse_standard/sensors",
+      "mqtt_actuator_topic": "assets/warehouse_standard/actuators",
+      "rules": {
+        "temp_warning": 30,
+        "temp_critical": 40,
+        "stock_low": 20
+      }
+    },
+    {
+      "asset_id": "warehouse_hazard",
+      "mqtt_sensor_topic": "assets/warehouse_hazard/sensors",
+      "mqtt_actuator_topic": "assets/warehouse_hazard/actuators",
+      "rules": {
+        "temp_warning": 20,
+        "temp_critical": 25,
+        "stock_low": 5
+      }
+    }
+  ]
+}

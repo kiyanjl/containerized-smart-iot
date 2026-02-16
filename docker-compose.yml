@@ -1,0 +1,126 @@
+version: "3.9"
+
+services:
+
+  # =========================
+  # MQTT BROKER
+  # =========================
+  mqtt-broker:
+    image: eclipse-mosquitto
+    container_name: mqtt-broker
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mqtt-broker/mosquitto.conf:/mosquitto/config/mosquitto.conf
+    networks:
+      - iot-net
+
+  # =========================
+  # CATALOG SERVICE
+  # =========================
+  catalog-service:
+    build: ./catalog-service
+    container_name: catalog-service
+    ports:
+      - "8080:8080"
+    networks:
+      - iot-net
+
+  # =========================
+  # SENSOR SIMULATOR
+  # =========================
+  sensor-simulator:
+    build: ./sensor-simulator
+    container_name: sensor-simulator
+    depends_on:
+      - mqtt-broker
+      - catalog-service
+    networks:
+      - iot-net
+
+  # =========================
+  # INFLUXDB (DATABASE)
+  # =========================
+  influxdb:
+    image: influxdb:2.7
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: admin123
+      DOCKER_INFLUXDB_INIT_ORG: smart-iot
+      DOCKER_INFLUXDB_INIT_BUCKET: warehouse_metrics
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: NnVSDg3Jxb8K1hpRyu8eMNCXf6Uix-T04fEti98mgN15sIjqn-qEWY8o72MLJwvVEZG1qG7ZD4cOlzL60Zyacg==
+    networks:
+      - iot-net
+
+  # =========================
+  # SMART CONTROLLER
+  # =========================
+  controller-service:
+    build: ./controller-service
+    container_name: controller-service
+    ports:
+      - "8001:8001"
+    environment:
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: ttEGgc-Vn6BnuQ-k3Eg7rUS8StgHy3DO-GVyEJsiDkoxiYMILi-7_0G_mGuVMtQ7Q1wHWcpmpRtiEiOyquFUDg==
+      INFLUX_ORG: smart-iot
+      INFLUX_BUCKET: warehouse_metrics
+    depends_on:
+      - influxdb
+      - mqtt-broker
+    networks:
+      - iot-net
+
+  # =========================
+  # ACTUATOR SERVICE
+  # =========================
+  actuator-service:
+    build: ./actuator-service
+    container_name: actuator-service
+    depends_on:
+      - mqtt-broker
+    networks:
+      - iot-net
+
+  # =========================
+  # GRAFANA
+  # =========================
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - influxdb
+    networks:
+      - iot-net
+
+  # =========================
+  # USER DASHBOARD
+  # =========================
+  dashboard:
+    build: ./dashboard
+    container_name: dashboard
+    ports:
+      - "8501:8501"
+    depends_on:
+      - controller-service
+      - catalog-service
+    networks:
+      - iot-net
+
+# =========================
+# NETWORK & VOLUME
+# =========================
+networks:
+  iot-net:
+
+volumes:
+  influxdb-data:

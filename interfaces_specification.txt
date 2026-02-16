@@ -1,0 +1,158 @@
+# Containerized Smart IoT System – Interface Specification
+
+This document defines all interfaces used in the project.
+All services must follow these definitions.
+
+--------------------------------------------------
+1. PROJECT OVERVIEW
+--------------------------------------------------
+
+This system is a fully containerized IoT platform built with Docker.
+It uses:
+- MQTT for real-time communication
+- REST APIs for configuration and user interaction
+- A time-series database for historical data
+- A web dashboard for visualization and control
+- Telegram for alerting
+
+All logic is configuration-driven. No hardcoded assets.
+
+--------------------------------------------------
+2. MQTT TOPICS
+--------------------------------------------------
+
+2.1 Sensor → System (Publish)
+
+Topic pattern:
+assets/{asset_id}/sensors
+
+Examples:
+assets/warehouse_1/sensors
+assets/storage_A/sensors
+
+Direction:
+Sensor Simulator → MQTT Broker → Smart Controller
+
+--------------------------------------------------
+2.2 Controller → Actuator (Publish)
+
+Topic pattern:
+assets/{asset_id}/actuator
+
+Examples:
+assets/warehouse_1/actuator
+assets/storage_A/actuator
+
+Direction:
+Smart Controller → MQTT Broker → Actuator Service
+
+--------------------------------------------------
+3. MQTT PAYLOADS
+--------------------------------------------------
+
+3.1 Sensor Payload
+
+{
+  "asset_id": "warehouse_1",
+  "timestamp": 1710000000,
+  "temperature": 32.5,
+  "stock_level": 18,
+  "door_state": "OPEN"
+}
+
+Meaning:
+- temperature: environment condition
+- stock_level: inventory status
+- door_state: security state
+
+--------------------------------------------------
+3.2 Actuator Command Payload
+
+{
+  "timestamp": 1710000050,
+  "fan": "ON",
+  "alarm": "OFF",
+  "lock": "CLOSED",
+  "severity": "WARNING",
+  "reason": "High temperature detected"
+}
+
+--------------------------------------------------
+4. CATALOG SERVICE (REST API)
+--------------------------------------------------
+
+Base URL:
+http://catalog-service:8080
+
+GET /assets
+GET /assets/{asset_id}
+
+POST /assets
+Payload:
+{
+  "asset_id": "warehouse_1",
+  "mqtt_sensor_topic": "assets/warehouse_1/sensors",
+  "mqtt_actuator_topic": "assets/warehouse_1/actuator",
+  "rules": {
+    "temp_warning": 30,
+    "temp_critical": 40,
+    "stock_low": 20
+  }
+}
+
+--------------------------------------------------
+5. SMART CONTROLLER (REST API)
+--------------------------------------------------
+
+Base URL:
+http://controller:8001
+
+GET /status
+
+POST /control/{asset_id}
+Payload:
+{
+  "fan": "OFF",
+  "alarm": "ON"
+}
+
+--------------------------------------------------
+6. ALERT LEVELS
+--------------------------------------------------
+
+NORMAL:
+- No action
+
+WARNING:
+- Temperature > warning threshold
+- Fan ON
+
+CRITICAL:
+- Temperature > critical threshold
+- Alarm ON
+
+SECURITY:
+- Door OPEN + low stock
+- Lock CLOSED + Alarm ON
+
+--------------------------------------------------
+7. DATA STORAGE
+--------------------------------------------------
+
+Database:
+InfluxDB (time-series)
+
+Stored metrics:
+- temperature
+- stock_level
+- door_state
+- severity
+
+--------------------------------------------------
+8. DOCKER RULES
+--------------------------------------------------
+
+- All services run in Docker containers
+- Services communicate using container names
+- No localhost usage
+- One Docker Compose network
