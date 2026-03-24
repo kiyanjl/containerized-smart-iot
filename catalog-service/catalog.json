@@ -5,31 +5,43 @@
     {
       "asset_id": "warehouse_cold",
       "mqtt_sensor_topic": "assets/warehouse_cold/sensors",
-      "mqtt_actuator_topic": "assets/warehouse_cold/actuators",
+      "mqtt_actuator_topic": "assets/warehouse_cold/actuator",
       "rules": {
         "temp_warning": 8,
         "temp_critical": 12,
-        "stock_low": 50
+        "stock_low": 50,
+        "stock_overload": 90,
+        "temp_anomaly_high": 18,
+        "temp_anomaly_low": -8,
+        "humidity_anomaly_high": 95
       }
     },
     {
       "asset_id": "warehouse_standard",
       "mqtt_sensor_topic": "assets/warehouse_standard/sensors",
-      "mqtt_actuator_topic": "assets/warehouse_standard/actuators",
+      "mqtt_actuator_topic": "assets/warehouse_standard/actuator",
       "rules": {
         "temp_warning": 30,
         "temp_critical": 40,
-        "stock_low": 20
+        "stock_low": 20,
+        "stock_overload": 90,
+        "temp_anomaly_high": 46,
+        "temp_anomaly_low": -5,
+        "humidity_anomaly_high": 96
       }
     },
     {
       "asset_id": "warehouse_hazard",
       "mqtt_sensor_topic": "assets/warehouse_hazard/sensors",
-      "mqtt_actuator_topic": "assets/warehouse_hazard/actuators",
+      "mqtt_actuator_topic": "assets/warehouse_hazard/actuator",
       "rules": {
         "temp_warning": 20,
         "temp_critical": 25,
-        "stock_low": 5
+        "stock_low": 5,
+        "stock_overload": 90,
+        "temp_anomaly_high": 47,
+        "temp_anomaly_low": -12,
+        "humidity_anomaly_high": 95
       }
     }
   ]

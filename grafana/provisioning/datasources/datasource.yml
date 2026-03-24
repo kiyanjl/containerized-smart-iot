@@ -5,9 +5,12 @@ datasources:
     type: influxdb
     access: proxy
     url: http://influxdb:8086
+    isDefault: true
+
     jsonData:
       version: Flux
       organization: smart-iot
-      defaultBucket: telemetry
+      defaultBucket: warehouse_metrics
+
     secureJsonData:
-      token: super-secret-token
+      token: NnVSDg3Jxb8K1hpRyu8eMNCXf6Uix-T04fEti98mgN15sIjqn-qEWY8o72MLJwvVEZG1qG7ZD4cOlzL60Zyacg==

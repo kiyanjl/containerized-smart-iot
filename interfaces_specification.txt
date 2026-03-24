@@ -1,158 +1,337 @@
-# Containerized Smart IoT System – Interface Specification
+# Containerized Smart IoT System - Interface Specification
 
-This document defines all interfaces used in the project.
-All services must follow these definitions.
+This document is the implementation-aligned contract for the project as it exists now.
+It describes the MQTT topics, REST endpoints, Telegram bot behavior, storage schema, and deployment expectations used by the running stack.
 
 --------------------------------------------------
 1. PROJECT OVERVIEW
 --------------------------------------------------
 
-This system is a fully containerized IoT platform built with Docker.
+The system is a containerized smart warehouse platform built with Docker Compose.
 It uses:
-- MQTT for real-time communication
-- REST APIs for configuration and user interaction
-- A time-series database for historical data
-- A web dashboard for visualization and control
-- Telegram for alerting
+- MQTT for telemetry, events, heartbeats, and actuation
+- REST APIs for catalog access and controller visibility
+- InfluxDB for time-series storage
+- Grafana for operational dashboards
+- Streamlit for the operations dashboard
+- Telegram for alerting and human interaction
 
-All logic is configuration-driven. No hardcoded assets.
+Core flow:
+Catalog Service -> Sensor Simulator -> MQTT Broker -> Smart Controller -> InfluxDB + Actuator Service + Alert Service -> Grafana + Streamlit + Telegram
 
 --------------------------------------------------
-2. MQTT TOPICS
+2. SERVICES
 --------------------------------------------------
 
-2.1 Sensor → System (Publish)
+mqtt-broker
+- MQTT message broker on port 1883
 
+catalog-service
+- Stores the warehouse registry and thresholds
+- Publishes rule updates on MQTT
+- HTTP port 8080
+
+sensor-simulator
+- Reads asset definitions from the catalog
+- Publishes telemetry, anomaly events, and heartbeats
+
+controller-service
+- Subscribes to MQTT telemetry and events
+- Applies rule logic
+- Publishes actuator commands
+- Writes measurements and events to InfluxDB
+- HTTP port 8001
+
+actuator-service
+- Subscribes to controller commands
+- Simulates local actions
+- Publishes actuator confirmations
+
+alert-service
+- Subscribes to MQTT telemetry and events
+- Sends Telegram push alerts
+- Polls Telegram for human commands
+
+influxdb
+- Stores telemetry, events, and device health
+- HTTP port 8086
+
+grafana
+- Reads InfluxDB and renders dashboards
+- HTTP port 3900 on the host
+
+dashboard
+- Streamlit operations UI
+- Reads from Catalog, Controller, InfluxDB, and embedded Grafana
+- HTTP port 8501
+
+--------------------------------------------------
+3. MQTT TOPICS
+--------------------------------------------------
+
+3.1 Sensor telemetry
 Topic pattern:
 assets/{asset_id}/sensors
 
-Examples:
-assets/warehouse_1/sensors
-assets/storage_A/sensors
-
 Direction:
-Sensor Simulator → MQTT Broker → Smart Controller
+Sensor Simulator -> MQTT Broker -> Smart Controller, Alert Service, Actuator edge-safety listener
 
---------------------------------------------------
-2.2 Controller → Actuator (Publish)
-
+3.2 Actuator commands
 Topic pattern:
 assets/{asset_id}/actuator
 
-Examples:
-assets/warehouse_1/actuator
-assets/storage_A/actuator
+Direction:
+Smart Controller -> MQTT Broker -> Actuator Service
+
+3.3 Catalog configuration updates
+Topic:
+catalog/config_updated
 
 Direction:
-Smart Controller → MQTT Broker → Actuator Service
+Catalog Service -> MQTT Broker -> Smart Controller, Alert Service
+
+3.4 Warehouse events
+Topic pattern:
+assets/{asset_id}/events
+
+Direction:
+- Sensor Simulator -> Smart Controller and Alert Service for anomaly event markers
+- Smart Controller -> Alert Service for device online/offline events
+- Actuator Service -> Smart Controller for actuation confirmations
+
+3.5 Heartbeats
+Topic pattern:
+assets/{asset_id}/heartbeat
+
+Direction:
+Sensor Simulator -> Smart Controller and Alert Service
 
 --------------------------------------------------
-3. MQTT PAYLOADS
+4. MQTT PAYLOADS
 --------------------------------------------------
 
-3.1 Sensor Payload
-
+4.1 Sensor payload
 {
-  "asset_id": "warehouse_1",
-  "timestamp": 1710000000,
-  "temperature": 32.5,
-  "stock_level": 18,
-  "door_state": "OPEN"
+  "warehouse_id": "warehouse_standard",
+  "temperature": 24.7,
+  "humidity": 58.1,
+  "stock": 42,
+  "door_open": 0,
+  "timestamp": 1710000000.0
 }
 
-Meaning:
-- temperature: environment condition
-- stock_level: inventory status
-- door_state: security state
-
---------------------------------------------------
-3.2 Actuator Command Payload
-
+4.2 Controller actuator command payload
 {
-  "timestamp": 1710000050,
-  "fan": "ON",
-  "alarm": "OFF",
-  "lock": "CLOSED",
-  "severity": "WARNING",
-  "reason": "High temperature detected"
+  "command_id": "1710000050.1234",
+  "action": {
+    "state": "WARNING",
+    "action": {
+      "fan": "ON",
+      "restock_alert": true
+    },
+    "timestamp": 1710000050.1234
+  }
 }
 
+4.3 Catalog rule update payload
+{
+  "asset_id": "warehouse_standard",
+  "rules": {
+    "temp_warning": 30,
+    "temp_critical": 40,
+    "stock_low": 20,
+    "stock_overload": 90,
+    "temp_anomaly_high": 46,
+    "temp_anomaly_low": -5,
+    "humidity_anomaly_high": 96
+  }
+}
+
+4.4 Anomaly event payload
+{
+  "warehouse_id": "warehouse_standard",
+  "event": "ANOMALY_DETECTED",
+  "anomaly_type": "HEAT_SPIKE",
+  "source": "sensor_simulator",
+  "timestamp": 1710000100.0
+}
+
+4.5 Device health event payload
+{
+  "warehouse_id": "warehouse_standard",
+  "event": "DEVICE_OFFLINE",
+  "source": "smart_controller",
+  "timestamp": 1710000200.0
+}
+
+4.6 Actuator confirmation payload
+{
+  "warehouse_id": "warehouse_standard",
+  "command_id": "1710000050.1234",
+  "status": "SUCCESS",
+  "timestamp": 1710000051.0
+}
+
+4.7 Influx-only actuator dispatch event
+- Generated by the Smart Controller when it publishes to assets/{asset_id}/actuator
+- Stored in measurement warehouse_event with:
+  - event = ACTUATOR_COMMAND_DISPATCHED
+  - source = smart_controller
+  - command_id = same command_id sent on MQTT
+  - status = controller state at dispatch time
+
 --------------------------------------------------
-4. CATALOG SERVICE (REST API)
+5. CATALOG SERVICE REST API
 --------------------------------------------------
 
 Base URL:
 http://catalog-service:8080
 
+GET /
+GET /health
 GET /assets
 GET /assets/{asset_id}
+GET /broker
+GET /port
 
-POST /assets
-Payload:
-{
-  "asset_id": "warehouse_1",
-  "mqtt_sensor_topic": "assets/warehouse_1/sensors",
-  "mqtt_actuator_topic": "assets/warehouse_1/actuator",
-  "rules": {
-    "temp_warning": 30,
-    "temp_critical": 40,
-    "stock_low": 20
-  }
-}
+POST /add_asset
+POST /delete_asset
+POST /update_rules
 
 --------------------------------------------------
-5. SMART CONTROLLER (REST API)
+6. CONTROLLER SERVICE REST API
 --------------------------------------------------
 
 Base URL:
-http://controller:8001
+http://controller-service:8001
 
+GET /
+GET /health
 GET /status
 
-POST /control/{asset_id}
-Payload:
-{
-  "fan": "OFF",
-  "alarm": "ON"
-}
+/update_rules
+- Exposed as a controller relay that republishes a catalog/config_updated MQTT message when called with a JSON body containing asset_id and rules
+- The preferred external configuration API remains the Catalog Service
 
 --------------------------------------------------
-6. ALERT LEVELS
+7. TELEGRAM BOT COMMANDS
 --------------------------------------------------
 
-NORMAL:
-- No action
+Bot username:
+@smartwarehouse_alert_bot
 
-WARNING:
-- Temperature > warning threshold
-- Fan ON
+Commands:
+/start
+- Registers the current chat for push alerts
+- Sends a welcome message and command menu
 
-CRITICAL:
-- Temperature > critical threshold
-- Alarm ON
+/status
+- Returns the latest known warehouse state, latest telemetry snapshot, and device status
 
-SECURITY:
-- Door OPEN + low stock
-- Lock CLOSED + Alarm ON
+/warehouses
+- Returns all registered warehouses and their thresholds from the catalog
+
+/alerts
+- Returns the last 10 alerts recorded by the alert service
+
+/pause 10
+- Pauses automatic push alerts globally for N minutes
+- Command replies remain available while the bot is paused
+
+/resume
+- Re-enables global automatic push alerts before the pause timer expires
+
+/mute 10
+- Silences automatic push alerts for the current chat for N minutes
+
+/unmute
+- Re-enables push alerts for the current chat
+
+/help
+- Returns the command list
+
+Automatic push alerts:
+- Warehouse enters ANOMALY
+- Warehouse enters CRITICAL
+- Warehouse enters OVERLOAD
+- Device goes OFFLINE
+- Device comes back ONLINE
+- Actuator confirmations are stored for proof and dashboards, but are not pushed as Telegram alerts by default to avoid alert noise
 
 --------------------------------------------------
-7. DATA STORAGE
+8. RULE ENGINE STATES
 --------------------------------------------------
 
-Database:
-InfluxDB (time-series)
-
-Stored metrics:
-- temperature
-- stock_level
-- door_state
-- severity
+NORMAL
+WARNING
+CRITICAL
+OVERLOAD
+ANOMALY
 
 --------------------------------------------------
-8. DOCKER RULES
+9. INFLUXDB STORAGE SCHEMA
+--------------------------------------------------
+
+Bucket:
+warehouse_metrics
+
+Organization:
+smart-iot
+
+9.1 Measurement: warehouse
+Tags:
+- warehouse_id
+- state
+
+Fields:
+- temperature (float)
+- humidity (float)
+- stock (integer)
+- state_code (integer)
+
+9.2 Measurement: warehouse_event
+Tags:
+- warehouse_id
+- event
+- anomaly_type
+- source
+- command_id
+- status
+
+Fields:
+- value (integer, always 1 for event markers)
+
+9.3 Measurement: device_health
+Tags:
+- warehouse_id
+- status
+
+Fields:
+- online (integer 0 or 1)
+- last_seen_age_sec (float)
+
+--------------------------------------------------
+10. DOCKER / NETWORK RULES
 --------------------------------------------------
 
 - All services run in Docker containers
-- Services communicate using container names
-- No localhost usage
-- One Docker Compose network
+- Services communicate over the shared iot-net network
+- Internal service-to-service calls use container/service names, not localhost
+- Host ports are only for external access from the developer machine
+- InfluxDB data is persisted in the influxdb-data volume
+- catalog.json is bind-mounted so catalog changes persist on the host
+- rules_cache.json is bind-mounted so controller rule cache persists on the host
+- alert-service/data is bind-mounted so Telegram subscribers and alert history persist on the host
+- Telegram credentials are loaded from a local .env file and must not be committed to git
+
+--------------------------------------------------
+11. OPERATOR URLS
+--------------------------------------------------
+
+From the host machine:
+- Catalog Service: http://localhost:8080
+- Controller Service: http://localhost:8001
+- InfluxDB: http://localhost:8086
+- Grafana: http://localhost:3900
+- Streamlit Dashboard: http://localhost:8501
+- Telegram Bot: @smartwarehouse_alert_bot

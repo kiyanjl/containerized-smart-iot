@@ -2,7 +2,8 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-RUN pip install cherrypy
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY catalog_service.py .
 COPY catalog.json .

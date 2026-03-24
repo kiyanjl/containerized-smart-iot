@@ -1,13 +1,8 @@
-version: "3.9"
-
 services:
-
-  # =========================
-  # MQTT BROKER
-  # =========================
   mqtt-broker:
     image: eclipse-mosquitto
     container_name: mqtt-broker
+    restart: unless-stopped
     ports:
       - "1883:1883"
     volumes:
@@ -15,34 +10,41 @@ services:
     networks:
       - iot-net
 
-  # =========================
-  # CATALOG SERVICE
-  # =========================
   catalog-service:
     build: ./catalog-service
     container_name: catalog-service
+    restart: unless-stopped
     ports:
       - "8080:8080"
+    volumes:
+      - ./catalog-service/catalog.json:/app/catalog.json
+    depends_on:
+      mqtt-broker:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     networks:
       - iot-net
 
-  # =========================
-  # SENSOR SIMULATOR
-  # =========================
   sensor-simulator:
     build: ./sensor-simulator
     container_name: sensor-simulator
+    restart: unless-stopped
     depends_on:
-      - mqtt-broker
-      - catalog-service
+      mqtt-broker:
+        condition: service_started
+      catalog-service:
+        condition: service_healthy
     networks:
       - iot-net
 
-  # =========================
-  # INFLUXDB (DATABASE)
-  # =========================
   influxdb:
     image: influxdb:2.7
+    restart: unless-stopped
     ports:
       - "8086:8086"
     volumes:
@@ -54,71 +56,143 @@ services:
       DOCKER_INFLUXDB_INIT_ORG: smart-iot
       DOCKER_INFLUXDB_INIT_BUCKET: warehouse_metrics
       DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: NnVSDg3Jxb8K1hpRyu8eMNCXf6Uix-T04fEti98mgN15sIjqn-qEWY8o72MLJwvVEZG1qG7ZD4cOlzL60Zyacg==
+    healthcheck:
+      test: ["CMD", "influx", "ping", "--host", "http://127.0.0.1:8086"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 20s
     networks:
       - iot-net
 
-  # =========================
-  # SMART CONTROLLER
-  # =========================
   controller-service:
     build: ./controller-service
     container_name: controller-service
+    restart: unless-stopped
     ports:
       - "8001:8001"
     environment:
       INFLUX_URL: http://influxdb:8086
-      INFLUX_TOKEN: ttEGgc-Vn6BnuQ-k3Eg7rUS8StgHy3DO-GVyEJsiDkoxiYMILi-7_0G_mGuVMtQ7Q1wHWcpmpRtiEiOyquFUDg==
+      INFLUX_TOKEN: NnVSDg3Jxb8K1hpRyu8eMNCXf6Uix-T04fEti98mgN15sIjqn-qEWY8o72MLJwvVEZG1qG7ZD4cOlzL60Zyacg==
       INFLUX_ORG: smart-iot
       INFLUX_BUCKET: warehouse_metrics
+    volumes:
+      - ./controller-service/rules_cache.json:/app/rules_cache.json
     depends_on:
-      - influxdb
-      - mqtt-broker
+      mqtt-broker:
+        condition: service_started
+      influxdb:
+        condition: service_healthy
+      catalog-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=3).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
     networks:
       - iot-net
 
-  # =========================
-  # ACTUATOR SERVICE
-  # =========================
   actuator-service:
     build: ./actuator-service
     container_name: actuator-service
+    restart: unless-stopped
     depends_on:
-      - mqtt-broker
+      mqtt-broker:
+        condition: service_started
     networks:
       - iot-net
 
-  # =========================
-  # GRAFANA
-  # =========================
+  alert-service:
+    build:
+      context: .
+      dockerfile: alert-service/Dockerfile
+    container_name: alert-service
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      MQTT_BROKER: mqtt-broker
+      MQTT_PORT: 1883
+      CATALOG_URL: http://catalog-service:8080
+      CONTROLLER_URL: http://controller-service:8001
+      ALERT_DATA_DIR: /app/data
+    volumes:
+      - ./alert-service/data:/app/data
+    depends_on:
+      mqtt-broker:
+        condition: service_started
+      catalog-service:
+        condition: service_healthy
+      controller-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "from pathlib import Path; import sys, time; path = Path('/tmp/alert-service.heartbeat'); sys.exit(0 if path.exists() and (time.time() - path.stat().st_mtime) < 90 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - iot-net
+
   grafana:
     image: grafana/grafana
     container_name: grafana
+    restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "3900:3000"
+    environment:
+      GF_SECURITY_ALLOW_EMBEDDING: "true"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/provisioning/dashboards:/var/lib/grafana/dashboards
     depends_on:
-      - influxdb
+      influxdb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/api/health >/dev/null"]
+      interval: 20s
+      timeout: 10s
+      retries: 6
+      start_period: 20s
     networks:
       - iot-net
 
-  # =========================
-  # USER DASHBOARD
-  # =========================
   dashboard:
     build: ./dashboard
     container_name: dashboard
+    restart: unless-stopped
     ports:
       - "8501:8501"
+    environment:
+      CATALOG_URL: http://catalog-service:8080
+      CONTROLLER_URL: http://controller-service:8001
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_TOKEN: NnVSDg3Jxb8K1hpRyu8eMNCXf6Uix-T04fEti98mgN15sIjqn-qEWY8o72MLJwvVEZG1qG7ZD4cOlzL60Zyacg==
+      INFLUX_ORG: smart-iot
+      INFLUX_BUCKET: warehouse_metrics
+      GRAFANA_PUBLIC_URL: http://localhost:3900
     depends_on:
-      - controller-service
-      - catalog-service
+      controller-service:
+        condition: service_healthy
+      catalog-service:
+        condition: service_healthy
+      influxdb:
+        condition: service_healthy
+      grafana:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=3).read()"]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 25s
     networks:
       - iot-net
 
-# =========================
-# NETWORK & VOLUME
-# =========================
 networks:
   iot-net:
 
