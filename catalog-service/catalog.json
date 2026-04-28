@@ -4,6 +4,12 @@
   "assets": [
     {
       "asset_id": "warehouse_cold",
+      "name": "Cold Storage Warehouse",
+      "type": "cold",
+      "location": "Building A, Floor 1",
+      "capacity": 100,
+      "owner": "John Smith",
+      "contact": "john.smith@company.com",
       "mqtt_sensor_topic": "assets/warehouse_cold/sensors",
       "mqtt_actuator_topic": "assets/warehouse_cold/actuator",
       "rules": {
@@ -18,6 +24,12 @@
     },
     {
       "asset_id": "warehouse_standard",
+      "name": "Standard Warehouse",
+      "type": "standard",
+      "location": "Building A, Floor 2",
+      "capacity": 100,
+      "owner": "Jane Doe",
+      "contact": "jane.doe@company.com",
       "mqtt_sensor_topic": "assets/warehouse_standard/sensors",
       "mqtt_actuator_topic": "assets/warehouse_standard/actuator",
       "rules": {
@@ -32,6 +44,12 @@
     },
     {
       "asset_id": "warehouse_hazard",
+      "name": "Hazardous Materials Warehouse",
+      "type": "hazard",
+      "location": "Building B, Floor 1",
+      "capacity": 100,
+      "owner": "Bob Johnson",
+      "contact": "bob.johnson@company.com",
       "mqtt_sensor_topic": "assets/warehouse_hazard/sensors",
       "mqtt_actuator_topic": "assets/warehouse_hazard/actuator",
       "rules": {

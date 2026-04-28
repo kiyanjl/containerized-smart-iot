@@ -54,6 +54,11 @@ class SmartController:
         self.known_assets = set(self.rules_cache.keys())
         self.controller_started_at = time.time()
 
+        # ✅ FIX #1: Add resilience data structures
+        self.pending_confirmations = {}  # Track commands waiting for ACK
+        self.influx_write_queue = []     # Queue failed InfluxDB writes
+        self.lock = threading.Lock()     # Thread-safe access
+
         self.bootstrap_rules_from_catalog()
 
         self.influx = None
@@ -71,6 +76,13 @@ class SmartController:
                 print("Connected to InfluxDB")
             except Exception as exc:
                 print("Failed to initialize InfluxDB client:", exc)
+
+        # ✅ FIX #2: Start daemon threads for monitoring
+        threading.Thread(target=self._monitor_confirmations,
+                         daemon=True).start()
+        threading.Thread(target=self._process_influx_queue,
+                         daemon=True).start()
+        threading.Thread(target=self._periodic_rule_sync, daemon=True).start()
 
     def save_rules_cache(self):
         with open(self.rules_file, "w") as handle:
@@ -105,6 +117,14 @@ class SmartController:
         client.subscribe("catalog/config_updated")
         client.subscribe("assets/+/events")
         client.subscribe("assets/+/heartbeat")
+
+    # ✅ FIX #3: Add disconnect handler
+    def on_disconnect(self, client, userdata, rc):
+        """Handle MQTT broker disconnection"""
+        if rc != 0:
+            print(f"⚠ Unexpected MQTT disconnect, rc={rc}. Reconnecting...")
+        else:
+            print("Controller disconnected from MQTT broker (normal)")
 
     def on_message(self, client, userdata, msg):
         topic = msg.topic
@@ -155,6 +175,14 @@ class SmartController:
                 except Exception as exc:
                     print("Failed to store event:", exc)
             elif payload.get("status"):
+                # ✅ FIX #4: Record confirmation and remove from tracking
+                command_id = payload.get("command_id")
+                if command_id:
+                    with self.lock:
+                        self.pending_confirmations.pop(
+                            command_id, None)  # Remove from tracking
+                    print(f"✓ Confirmation received for command {command_id}")
+
                 print("Actuator confirmation:", payload)
                 try:
                     self.store_event_influx({
@@ -200,7 +228,14 @@ class SmartController:
         decision = self.apply_rules(payload, config)
 
         self.publish_command(asset_id, decision)
-        self.state[asset_id] = decision
+        self.state[asset_id] = {
+            **decision,
+            "temperature": float(payload.get("temperature", 0)),
+            "humidity": float(payload.get("humidity", 0)),
+            "stock": int(payload.get("stock", 0)),
+            "door_open": payload.get("door_open", 0),
+            "timestamp": time.time(),
+        }
 
         try:
             self.store_influx(asset_id, payload, decision)
@@ -225,7 +260,16 @@ class SmartController:
             "command_id": command_id,
             "action": decision,
         }
-        self.client.publish(topic, json.dumps(command), retain=True)
+        # ✅ FIX #5: Change QoS from 0 → 2 (GUARANTEED DELIVERY)
+        self.client.publish(topic, json.dumps(command), qos=2, retain=True)
+
+        # ✅ FIX #6: Track command in pending_confirmations
+        with self.lock:
+            self.pending_confirmations[command_id] = {
+                "asset_id": asset_id,
+                "sent_at": time.time()
+            }
+
         try:
             self.store_event_influx({
                 "warehouse_id": asset_id,
@@ -239,11 +283,13 @@ class SmartController:
         except Exception as exc:
             print("Failed to store actuator command dispatch:", exc)
 
+        return command_id
+
     def store_influx(self, asset_id, data, decision):
         if not self.write_api:
             return
 
-        print("Writing to InfluxDB...")
+        print("Queuing to InfluxDB...")
         state = decision["state"]
 
         point = (
@@ -257,13 +303,19 @@ class SmartController:
             .time(time.time_ns(), WritePrecision.NS)
         )
 
-        self.write_api.write(
-            bucket=INFLUX_BUCKET,
-            org=INFLUX_ORG,
-            record=point,
-        )
-
-        print("Write complete")
+        # ✅ FIX #11: Use async write with retry queue
+        try:
+            self.write_api.write(
+                bucket=INFLUX_BUCKET,
+                org=INFLUX_ORG,
+                record=point,
+            )
+            print("Write complete")
+        except Exception as exc:
+            print(f"⚠ InfluxDB write failed: {exc}")
+            with self.lock:
+                self.influx_write_queue.append(point)
+            print("Write queued for retry")
 
     def store_event_influx(self, payload):
         if not self.write_api:
@@ -367,10 +419,89 @@ class SmartController:
                     if not online:
                         print(f"Device offline alert published: {asset_id}")
 
+    # ✅ FIX #7: Monitor confirmation timeouts
+    def _monitor_confirmations(self):
+        """
+        Monitor for confirmation timeouts.
+        If command sent but no ACK within 30s, log warning.
+        """
+        while True:
+            time.sleep(5)  # Check every 5 seconds
+            now = time.time()
+
+            with self.lock:
+                timed_out = []
+                for command_id, info in list(self.pending_confirmations.items()):
+                    elapsed = now - info["sent_at"]
+                    if elapsed > 30:  # 30 second timeout
+                        timed_out.append(
+                            (command_id, info["asset_id"], elapsed))
+                        self.pending_confirmations.pop(command_id, None)
+
+            for command_id, asset_id, elapsed in timed_out:
+                print(f"⚠ TIMEOUT: No confirmation for command {command_id} "
+                      f"on {asset_id} after {elapsed:.1f}s")
+
+    # ✅ FIX #8: Retry InfluxDB writes
+    def _process_influx_queue(self):
+        """
+        Retry InfluxDB writes that failed.
+        Prevents data loss on transient network errors.
+        """
+        while True:
+            time.sleep(10)  # Try every 10 seconds
+            if not self.write_api or not self.influx_write_queue:
+                continue
+
+            with self.lock:
+                queue_copy = list(self.influx_write_queue)
+                self.influx_write_queue.clear()
+
+            for point in queue_copy:
+                try:
+                    self.write_api.write(
+                        bucket=INFLUX_BUCKET,
+                        org=INFLUX_ORG,
+                        record=point,
+                    )
+                    print(f"✓ Retried InfluxDB write successfully")
+                except Exception as exc:
+                    print(f"⚠ Retry write failed, re-queueing: {exc}")
+                    with self.lock:
+                        self.influx_write_queue.append(point)
+
+    # ✅ FIX #9: Periodic rule sync from catalog
+    def _periodic_rule_sync(self):
+        """
+        Refresh rules from catalog every 5 minutes.
+        Ensures catalog updates are picked up even if MQTT message missed.
+        """
+        while True:
+            time.sleep(300)  # 5 minutes
+            try:
+                response = requests.get(f"{CATALOG_URL}/assets", timeout=5)
+                response.raise_for_status()
+                assets = response.json()
+
+                with self.lock:
+                    for asset in assets:
+                        self.rules_cache[asset["asset_id"]
+                                         ] = asset.get("rules", {})
+
+                self.save_rules_cache()
+                print(f"✓ Rules synced from catalog ({len(assets)} assets)")
+            except Exception as exc:
+                print(f"⚠ Rule sync failed: {exc}")
+
     def start_mqtt(self):
         print("Connecting to MQTT broker...")
+        # ✅ FIX #10: Add disconnect handler + exponential backoff reconnect
+        self.client.on_disconnect = self.on_disconnect
+        self.client.reconnect_delay_set(1, 32)  # Backoff: 1s → 32s
+
         self.client.connect(MQTT_BROKER, MQTT_PORT)
         self.client.loop_forever()
+
 
 controller = None
 
@@ -388,7 +519,7 @@ class RootAPI:
     def index(self):
         return {
             "service": "Smart Controller",
-            "endpoints": ["/status", "/health"],
+            "endpoints": ["/status", "/health", "/events", "/state_history", "/commands", "/manual_command"],
         }
 
     @cherrypy.expose
@@ -433,6 +564,172 @@ class RootAPI:
             print(f"Published rule update for {asset_id}")
             return {"success": True, "asset_id": asset_id}
         except Exception as exc:
+            return {"error": str(exc)}
+            
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def events(self):
+        """Get recent events from InfluxDB"""
+        try:
+            current_controller = get_controller()
+            if not current_controller.influx:
+                return {"events": [], "error": "InfluxDB client is not available"}
+
+            query = (
+                f'from(bucket:"{INFLUX_BUCKET}") '
+                '|> range(start: -6h) '
+                '|> filter(fn: (r) => r._measurement == "warehouse_event") '
+                '|> filter(fn: (r) => r._field == "value") '
+                '|> keep(columns: ["_time", "warehouse_id", "event", "anomaly_type", "source", "command_id", "status", "_value"]) '
+                '|> group() '
+                '|> sort(columns: ["_time"], desc: true) '
+                '|> limit(n: 100)'
+            )
+            result = current_controller.influx.query_api().query(
+                query,
+                org=INFLUX_ORG,
+            )
+            
+            events = []
+            for table in result:
+                for record in table.records:
+                    events.append({
+                        "time": record.get_time().isoformat(),
+                        "warehouse_id": record.values.get("warehouse_id"),
+                        "event": record.values.get("event"),
+                        "anomaly_type": record.values.get("anomaly_type"),
+                        "source": record.values.get("source"),
+                        "command_id": record.values.get("command_id"),
+                        "status": record.values.get("status"),
+                        "value": record.get_value()
+                    })
+            
+            return {"events": events}
+        except Exception as exc:
+            return {"error": str(exc)}
+            
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def state_history(self, asset_id=None):
+        """Get state history for all or specific warehouse"""
+        try:
+            current_controller = get_controller()
+            if not current_controller.influx:
+                return {"states": [], "error": "InfluxDB client is not available"}
+
+            if asset_id:
+                filter_condition = f' |> filter(fn: (r) => r.warehouse_id == "{asset_id}")'
+            else:
+                filter_condition = ""
+
+            query = (
+                f'from(bucket:"{INFLUX_BUCKET}") '
+                '|> range(start: -6h) '
+                '|> filter(fn: (r) => r._measurement == "warehouse") '
+                f'{filter_condition}'
+                '|> filter(fn: (r) => r._field == "temperature" or r._field == "humidity" or r._field == "stock" or r._field == "state_code") '
+                '|> pivot(rowKey:["_time", "warehouse_id", "state"], columnKey: ["_field"], valueColumn: "_value") '
+                '|> group() '
+                '|> sort(columns: ["_time"], desc: true) '
+                '|> limit(n: 500)'
+            )
+            result = current_controller.influx.query_api().query(
+                query,
+                org=INFLUX_ORG,
+            )
+            
+            states = []
+            for table in result:
+                for record in table.records:
+                    states.append({
+                        "time": record.get_time().isoformat(),
+                        "warehouse_id": record.values.get("warehouse_id"),
+                        "state": record.values.get("state"),
+                        "temperature": record.values.get("temperature"),
+                        "humidity": record.values.get("humidity"),
+                        "stock": record.values.get("stock"),
+                        "state_code": record.values.get("state_code")
+                    })
+            
+            return {"states": states}
+        except Exception as exc:
+            return {"error": str(exc)}
+            
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def commands(self):
+        """Get pending and recent commands"""
+        controller = get_controller()
+        with controller.lock:
+            pending = []
+            for command_id, info in controller.pending_confirmations.items():
+                pending.append({
+                    "command_id": command_id,
+                    "asset_id": info["asset_id"],
+                    "sent_at": info["sent_at"],
+                    "elapsed": time.time() - info["sent_at"]
+                })
+                
+        return {
+            "pending_confirmations": len(pending),
+            "pending_commands": pending,
+            "total_known_assets": len(controller.known_assets)
+        }
+
+    @cherrypy.expose
+    @cherrypy.tools.json_out()
+    def manual_command(self):
+        """Dispatch a manual actuator command from the dashboard."""
+        try:
+            body = cherrypy.request.body.read().decode()
+            data = json.loads(body or "{}")
+            asset_id = data.get("asset_id")
+            action_name = data.get("action")
+
+            allowed_actions = {
+                "fan_on": {"fan": "ON"},
+                "dehumidifier_on": {"dehumidifier": "ON"},
+                "pause_deliveries": {"pause_deliveries": True},
+                "restock_alert": {"restock_alert": True},
+                "emergency_shutdown": {"emergency_shutdown": True, "fan": "ON"},
+            }
+
+            if not asset_id or action_name not in allowed_actions:
+                cherrypy.response.status = 400
+                return {
+                    "error": "asset_id and a valid action are required",
+                    "allowed_actions": sorted(allowed_actions),
+                }
+
+            decision = {
+                "state": "MANUAL",
+                "action": allowed_actions[action_name],
+                "timestamp": time.time(),
+            }
+
+            controller = get_controller()
+            command_id = controller.publish_command(asset_id, decision)
+            controller.client.publish(
+                f"assets/{asset_id}/events",
+                json.dumps({
+                    "warehouse_id": asset_id,
+                    "event": "MANUAL_COMMAND_REQUESTED",
+                    "source": "dashboard",
+                    "command_id": command_id,
+                    "status": action_name,
+                    "timestamp": time.time(),
+                }),
+                qos=1,
+            )
+            return {
+                "success": True,
+                "asset_id": asset_id,
+                "action": action_name,
+                "command_id": command_id,
+                "decision": decision,
+            }
+        except Exception as exc:
+            cherrypy.response.status = 500
             return {"error": str(exc)}
 
 

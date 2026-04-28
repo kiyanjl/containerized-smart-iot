@@ -73,6 +73,10 @@ def parse_env_file(path):
     return values
 
 
+ENV_SETTINGS = parse_env_file(ROOT / ".env") if (ROOT / ".env").exists() else {}
+GRAFANA_PORT = ENV_SETTINGS.get("GRAFANA_PORT", "3100")
+
+
 def influx_query(flux):
     settings = parse_env_file(ROOT / "database" / "influxdb.env")
     headers = {
@@ -111,7 +115,7 @@ def assert_running_services():
 def check_http_endpoints():
     catalog_health = http_json("http://localhost:8080/health")
     controller_health = http_json("http://localhost:8001/health")
-    grafana_health = http_json("http://localhost:3900/api/health")
+    grafana_health = http_json(f"http://localhost:{GRAFANA_PORT}/api/health")
     dashboard_health = http_text("http://localhost:8501/_stcore/health")
     assets = http_json("http://localhost:8080/assets")
 
@@ -131,12 +135,18 @@ def check_http_endpoints():
 
 
 def check_alert_service():
-    logs = run_command(["docker", "compose", "logs", "alert-service", "--tail", "80"])
+    status = http_json("http://localhost:5002/status")
+    if not status.get("telegram_configured"):
+        raise SmokeTestError("Alert service reports Telegram is not configured")
+    if status.get("warehouses_active", 0) < 1:
+        raise SmokeTestError("Alert service has not received warehouse telemetry")
+
+    logs = run_command(["docker", "compose", "logs", "alert-service", "--tail", "800"])
     if "Telegram bot verified" not in logs:
         raise SmokeTestError("Alert service logs do not show Telegram bot validation")
     if "Telegram command polling started" not in logs:
         raise SmokeTestError("Alert service logs do not show Telegram polling startup")
-    print("PASS: Alert Service started and Telegram polling is active")
+    print("PASS: Alert Service API is healthy and Telegram polling is active")
 
 
 def check_recent_influx_data(expected_assets):

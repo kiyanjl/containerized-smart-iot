@@ -22,3 +22,7 @@ htmlcov/
 
 # Project specific
 alert-service/data/*.json
+mqtt-broker/data/
+mqtt-broker/log/
+*.bak
+*.backup

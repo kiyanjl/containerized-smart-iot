@@ -62,7 +62,7 @@ flowchart LR
 | Actuator Service | `actuator-service/` | Simulated device actions and confirmation events | internal only |
 | Alert Service | `alert-service/` | Telegram push alerts and human bot commands | internal only |
 | InfluxDB | managed image | Time-series storage | `8086` |
-| Grafana | `grafana/provisioning/` | Provisioned dashboards and annotations | `3900` |
+| Grafana | `grafana/provisioning/` | Provisioned dashboards and annotations | `${GRAFANA_PORT:-3100}` |
 | Streamlit Dashboard | `dashboard/` | Operator UI with charts and embedded Grafana | `8501` |
 
 ## Repository map
@@ -158,8 +158,10 @@ Measurements:
 ### Start the stack
 
 ```powershell
-docker compose up --build -d
+powershell -ExecutionPolicy Bypass -File .\scripts\start_stack.ps1
 ```
+
+The startup script avoids Windows excluded-port failures by selecting a usable Grafana host port and writing it to `.env`. If you prefer plain Compose, run `docker compose up --build -d` after confirming `GRAFANA_PORT` is not reserved or already in use.
 
 ### Configure Telegram
 
@@ -190,7 +192,7 @@ docker compose down -v
 - Catalog Service: `http://localhost:8080`
 - Controller Service: `http://localhost:8001`
 - InfluxDB: `http://localhost:8086`
-- Grafana: `http://localhost:3900`
+- Grafana: `http://localhost:3100` by default, or the port configured as `GRAFANA_PORT` in `.env`
 - Streamlit Dashboard: `http://localhost:8501`
 - Telegram Bot: `@smartwarehouse_alert_bot`
 
@@ -198,7 +200,7 @@ Health endpoints:
 - Catalog: `http://localhost:8080/health`
 - Controller: `http://localhost:8001/health`
 - Dashboard: `http://localhost:8501/_stcore/health`
-- Grafana: `http://localhost:3900/api/health`
+- Grafana: `http://localhost:3100/api/health` by default, or `http://localhost:{GRAFANA_PORT}/api/health`
 - InfluxDB: `http://localhost:8086/health`
 
 ## Automated verification
@@ -233,7 +235,7 @@ python scripts\smoke_test.py
 
 Use this when submitting the project or preparing a demo:
 
-1. `docker compose up --build -d`
+1. `powershell -ExecutionPolicy Bypass -File .\scripts\start_stack.ps1`
 2. `docker compose ps`
 3. `python -m unittest discover -s tests -p "test_*.py"`
 4. `python scripts\smoke_test.py`

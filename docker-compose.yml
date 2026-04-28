@@ -1,14 +1,16 @@
 services:
   mqtt-broker:
-    image: eclipse-mosquitto
+    image: eclipse-mosquitto:2
     container_name: mqtt-broker
     restart: unless-stopped
     ports:
       - "1883:1883"
+      - "9001:9001"
     volumes:
       - ./mqtt-broker/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mqtt-data:/mosquitto/data
     networks:
-      - iot-net
+      - iot-network
 
   catalog-service:
     build: ./catalog-service
@@ -28,7 +30,7 @@ services:
       retries: 5
       start_period: 10s
     networks:
-      - iot-net
+      - iot-network
 
   sensor-simulator:
     build: ./sensor-simulator
@@ -40,7 +42,7 @@ services:
       catalog-service:
         condition: service_healthy
     networks:
-      - iot-net
+      - iot-network
 
   influxdb:
     image: influxdb:2.7
@@ -63,7 +65,7 @@ services:
       retries: 8
       start_period: 20s
     networks:
-      - iot-net
+      - iot-network
 
   controller-service:
     build: ./controller-service
@@ -92,7 +94,7 @@ services:
       retries: 5
       start_period: 15s
     networks:
-      - iot-net
+      - iot-network
 
   actuator-service:
     build: ./actuator-service
@@ -102,7 +104,7 @@ services:
       mqtt-broker:
         condition: service_started
     networks:
-      - iot-net
+      - iot-network
 
   alert-service:
     build:
@@ -110,14 +112,19 @@ services:
       dockerfile: alert-service/Dockerfile
     container_name: alert-service
     restart: unless-stopped
-    env_file:
-      - ./.env
+    ports:
+      - "5002:5002"
     environment:
       MQTT_BROKER: mqtt-broker
       MQTT_PORT: 1883
       CATALOG_URL: http://catalog-service:8080
       CONTROLLER_URL: http://controller-service:8001
       ALERT_DATA_DIR: /app/data
+      ALERT_PORT: 5002
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_API_BASE: https://api.telegram.org/bot
+      ALERT_RATE_LIMIT: ${ALERT_RATE_LIMIT:-30}
     volumes:
       - ./alert-service/data:/app/data
     depends_on:
@@ -128,20 +135,20 @@ services:
       controller-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "from pathlib import Path; import sys, time; path = Path('/tmp/alert-service.heartbeat'); sys.exit(0 if path.exists() and (time.time() - path.stat().st_mtime) < 90 else 1)"]
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:5002/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 5
       start_period: 30s
     networks:
-      - iot-net
+      - iot-network
 
   grafana:
     image: grafana/grafana
     container_name: grafana
     restart: unless-stopped
     ports:
-      - "3900:3000"
+      - "${GRAFANA_PORT:-3100}:3000"
     environment:
       GF_SECURITY_ALLOW_EMBEDDING: "true"
       GF_AUTH_ANONYMOUS_ENABLED: "true"
@@ -149,6 +156,7 @@ services:
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning
       - ./grafana/provisioning/dashboards:/var/lib/grafana/dashboards
+      - grafana-storage:/var/lib/grafana
     depends_on:
       influxdb:
         condition: service_healthy
@@ -159,7 +167,7 @@ services:
       retries: 6
       start_period: 20s
     networks:
-      - iot-net
+      - iot-network
 
   dashboard:
     build: ./dashboard
@@ -174,7 +182,7 @@ services:
       INFLUX_TOKEN: NnVSDg3Jxb8K1hpRyu8eMNCXf6Uix-T04fEti98mgN15sIjqn-qEWY8o72MLJwvVEZG1qG7ZD4cOlzL60Zyacg==
       INFLUX_ORG: smart-iot
       INFLUX_BUCKET: warehouse_metrics
-      GRAFANA_PUBLIC_URL: http://localhost:3900
+      GRAFANA_PUBLIC_URL: http://localhost:${GRAFANA_PORT:-3100}
     depends_on:
       controller-service:
         condition: service_healthy
@@ -191,10 +199,12 @@ services:
       retries: 6
       start_period: 25s
     networks:
-      - iot-net
+      - iot-network
 
 networks:
-  iot-net:
+  iot-network:
 
 volumes:
   influxdb-data:
+  mqtt-data:
+  grafana-storage:
