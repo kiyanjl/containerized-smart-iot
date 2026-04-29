@@ -24,7 +24,7 @@ The platform models three warehouse types (`warehouse_cold`, `warehouse_standard
 - InfluxDB storage for telemetry, events, and device health
 - Actuation trace in InfluxDB for command dispatch plus confirmation proof
 - Grafana dashboard with connectivity annotations
-- Streamlit operations dashboard with direct InfluxDB charts and embedded Grafana
+- Streamlit operations dashboard using REST data from Catalog, Controller, and Alert Service, with Grafana access
 - Telegram bot for push alerts and operator commands
 - Automated smoke test for end-to-end build proof
 - Unit tests for the controller rule engine
@@ -33,23 +33,30 @@ The platform models three warehouse types (`warehouse_cold`, `warehouse_standard
 
 ```mermaid
 flowchart LR
-    Catalog[Catalog Service] -->|REST /assets| Simulator[Sensor Simulator]
-    Catalog -->|MQTT catalog/config_updated| Controller[Smart Controller]
-    Simulator -->|MQTT assets/+/sensors| Broker[(MQTT Broker)]
+    Streamlit[Streamlit Dashboard] -->|REST GET /assets| Catalog[Catalog Service]
+    Streamlit -->|REST GET /status, /events, /state_history, /commands| Controller[Smart Controller]
+    Streamlit -->|REST POST /manual_command| Controller
+    Streamlit -->|REST GET /alerts, /status| Alert[Alert Service]
+
+    Simulator[Sensor Simulator] -->|REST GET /assets, /broker, /port| Catalog
+    Catalog -->|MQTT catalog/config_updated| Broker[(MQTT Broker)]
+    Simulator -->|MQTT assets/+/sensors| Broker
     Simulator -->|MQTT assets/+/events| Broker
     Simulator -->|MQTT assets/+/heartbeat| Broker
-    Broker --> Controller
-    Controller -->|MQTT assets/+/actuator| Broker
-    Broker --> Actuator[Actuator Service]
-    Actuator -->|MQTT assets/+/events| Broker
-    Broker --> Alert[Alert Service]
+
+    Broker -->|MQTT assets/+/sensors, assets/+/events, assets/+/heartbeat, catalog/config_updated| Controller
+    Controller -->|MQTT assets/+/actuator, assets/+/events| Broker
+    Broker -->|MQTT assets/+/actuator| Actuator[Actuator Service]
+    Actuator -->|MQTT assets/+/events confirmations| Broker
+    Broker -->|MQTT assets/#, system/device_status| Alert
     Alert --> Telegram[Telegram Bot / Human Operator]
-    Controller --> Influx[(InfluxDB)]
-    Influx --> Grafana[Grafana]
-    Influx --> Streamlit[Streamlit Dashboard]
-    Catalog --> Streamlit
-    Controller --> Streamlit
+
+    Controller -->|write telemetry, events, health| Influx[(InfluxDB)]
+    Controller -->|query events/history for REST responses| Influx
+    Grafana[Grafana] -->|Flux queries| Influx
 ```
+
+Important diagram rule: Streamlit is not receiving pushed data through WebSocket or SSE. Streamlit polls REST endpoints when the page refreshes. Therefore the REST arrows point from Streamlit to Catalog, Controller, and Alert Service.
 
 ## Services and responsibilities
 
@@ -63,7 +70,7 @@ flowchart LR
 | Alert Service | `alert-service/` | Telegram push alerts and human bot commands | internal only |
 | InfluxDB | managed image | Time-series storage | `8086` |
 | Grafana | `grafana/provisioning/` | Provisioned dashboards and annotations | `${GRAFANA_PORT:-3100}` |
-| Streamlit Dashboard | `dashboard/` | Operator UI with charts and embedded Grafana | `8501` |
+| Streamlit Dashboard | `dashboard/` | Operator UI that polls REST APIs and links to Grafana/InfluxDB | `8501` |
 
 ## Repository map
 
@@ -130,12 +137,9 @@ Main topics:
 Telegram commands:
 - `/start`
 - `/status`
-- `/warehouses`
 - `/alerts`
-- `/pause 10`
-- `/resume`
-- `/mute 10`
-- `/unmute`
+- `/subscribe`
+- `/unsubscribe`
 - `/help`
 
 ## InfluxDB schema
@@ -269,13 +273,13 @@ Actuator confirmations make the control loop observable. They prove that the con
 
 The bot adds a human notification layer and a lightweight control-room chat interface. That makes the platform look much closer to a real industrial IoT system where automation and operators work together.
 
-### Pause vs mute
+### Why actuator confirmations return through MQTT
 
-The Telegram bot supports two different silence modes:
-- `/mute 10`: silences alerts only for the current chat for N minutes
-- `/pause 10`: pauses automatic alerts globally for all chats for N minutes while keeping commands alive
+The actuator publishes confirmation events back to the MQTT broker on `assets/{asset_id}/events`. This is intentional: the message re-enters the system so the controller can verify the action, remove the pending command, store proof in InfluxDB, and expose the result to the dashboard. Without this feedback message, the controller would only know that it sent a command, not that the actuator processed it.
 
-`/resume` re-enables the global automatic alerts before the pause timer expires.
+### Telegram command scope
+
+The Telegram bot currently supports `/start`, `/status`, `/alerts`, `/subscribe`, `/unsubscribe`, and `/help`. Runtime actuator commands are sent from the Streamlit dashboard through `POST /manual_command`; Telegram receives notifications about those manual commands and safety alerts.
 
 ## Production-vs-demo notes
 

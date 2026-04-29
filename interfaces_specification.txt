@@ -10,14 +10,14 @@ It describes the MQTT topics, REST endpoints, Telegram bot behavior, storage sch
 The system is a containerized smart warehouse platform built with Docker Compose.
 It uses:
 - MQTT for telemetry, events, heartbeats, and actuation
-- REST APIs for catalog access and controller visibility
+- REST APIs for catalog access, controller visibility/control, alert history, and dashboard polling
 - InfluxDB for time-series storage
 - Grafana for operational dashboards
 - Streamlit for the operations dashboard
 - Telegram for alerting and human interaction
 
 Core flow:
-Catalog Service -> Sensor Simulator -> MQTT Broker -> Smart Controller -> InfluxDB + Actuator Service + Alert Service -> Grafana + Streamlit + Telegram
+Catalog Service configures warehouses; Sensor Simulator publishes MQTT telemetry; Smart Controller decides and writes InfluxDB; Actuator Service confirms commands through MQTT; Alert Service listens to MQTT and notifies Telegram; Streamlit polls REST APIs; Grafana queries InfluxDB.
 
 --------------------------------------------------
 2. SERVICES
@@ -48,7 +48,7 @@ actuator-service
 - Publishes actuator confirmations
 
 alert-service
-- Subscribes to MQTT telemetry and events
+- Subscribes to MQTT assets/# and system/device_status
 - Sends Telegram push alerts
 - Polls Telegram for human commands
 
@@ -62,7 +62,8 @@ grafana
 
 dashboard
 - Streamlit operations UI
-- Reads from Catalog, Controller, InfluxDB, and embedded Grafana
+- Polls Catalog, Controller, and Alert Service through REST
+- Opens/embeds Grafana for historical charts; Grafana queries InfluxDB directly
 - HTTP port 8501
 
 --------------------------------------------------
@@ -76,6 +77,9 @@ assets/{asset_id}/sensors
 Direction:
 Sensor Simulator -> MQTT Broker -> Smart Controller, Alert Service, Actuator edge-safety listener
 
+Compatibility note:
+The active simulator publishes assets/{asset_id}/sensors. The controller also subscribes to warehouse/{asset_id}/sensors for legacy messages.
+
 3.2 Actuator commands
 Topic pattern:
 assets/{asset_id}/actuator
@@ -88,7 +92,7 @@ Topic:
 catalog/config_updated
 
 Direction:
-Catalog Service -> MQTT Broker -> Smart Controller, Alert Service
+Catalog Service -> MQTT Broker -> Smart Controller
 
 3.4 Warehouse events
 Topic pattern:
@@ -98,6 +102,7 @@ Direction:
 - Sensor Simulator -> Smart Controller and Alert Service for anomaly event markers
 - Smart Controller -> Alert Service for device online/offline events
 - Actuator Service -> Smart Controller for actuation confirmations
+- Actuator Service -> Alert Service for observable event stream
 
 3.5 Heartbeats
 Topic pattern:
@@ -228,24 +233,14 @@ Commands:
 /status
 - Returns the latest known warehouse state, latest telemetry snapshot, and device status
 
-/warehouses
-- Returns all registered warehouses and their thresholds from the catalog
-
 /alerts
 - Returns the last 10 alerts recorded by the alert service
 
-/pause 10
-- Pauses automatic push alerts globally for N minutes
-- Command replies remain available while the bot is paused
+/subscribe
+- Enables push alerts for the current chat
 
-/resume
-- Re-enables global automatic push alerts before the pause timer expires
-
-/mute 10
-- Silences automatic push alerts for the current chat for N minutes
-
-/unmute
-- Re-enables push alerts for the current chat
+/unsubscribe
+- Disables push alerts for the current chat
 
 /help
 - Returns the command list
@@ -256,7 +251,8 @@ Automatic push alerts:
 - Warehouse enters OVERLOAD
 - Device goes OFFLINE
 - Device comes back ONLINE
-- Actuator confirmations are stored for proof and dashboards, but are not pushed as Telegram alerts by default to avoid alert noise
+- Manual dashboard commands are sent as Telegram notifications
+- Actuator confirmations are stored for proof and dashboards
 
 --------------------------------------------------
 8. RULE ENGINE STATES
