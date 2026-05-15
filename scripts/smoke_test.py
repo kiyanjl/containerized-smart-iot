@@ -75,6 +75,7 @@ def parse_env_file(path):
 
 ENV_SETTINGS = parse_env_file(ROOT / ".env") if (ROOT / ".env").exists() else {}
 GRAFANA_PORT = ENV_SETTINGS.get("GRAFANA_PORT", "3100")
+DASHBOARD_PORT = ENV_SETTINGS.get("DASHBOARD_PORT", "18501")
 
 
 def influx_query(flux):
@@ -116,7 +117,7 @@ def check_http_endpoints():
     catalog_health = http_json("http://localhost:8080/health")
     controller_health = http_json("http://localhost:8001/health")
     grafana_health = http_json(f"http://localhost:{GRAFANA_PORT}/api/health")
-    dashboard_health = http_text("http://localhost:8501/_stcore/health")
+    dashboard_health = http_text(f"http://localhost:{DASHBOARD_PORT}/_stcore/health")
     assets = http_json("http://localhost:8080/assets")
 
     if catalog_health.get("status") != "ok":

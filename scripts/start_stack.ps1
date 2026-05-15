@@ -111,10 +111,29 @@ if (-not $selectedGrafanaPort) {
     throw "No usable Grafana port found. Tried: $($candidatePorts -join ', ')"
 }
 
+# Also handle Dashboard port
+$configuredDashboardPort = Get-EnvValue "DASHBOARD_PORT"
+if (-not $configuredDashboardPort) {
+    $configuredDashboardPort = 18501
+}
+
+if (-not (Test-PortUsable -Port [int]$configuredDashboardPort -ExcludedRanges $excludedRanges)) {
+    Write-Host "Configured Dashboard port $configuredDashboardPort is not usable. Finding a new one..."
+    $dashboardCandidates = @(18501, 18502, 18503, 18504, 18505)
+    foreach ($p in $dashboardCandidates) {
+        if (Test-PortUsable -Port $p -ExcludedRanges $excludedRanges) {
+            $configuredDashboardPort = $p
+            break
+        }
+    }
+}
+
 Set-EnvValue "GRAFANA_PORT" "$selectedGrafanaPort"
 Set-EnvValue "GRAFANA_PUBLIC_URL" "http://localhost:$selectedGrafanaPort"
+Set-EnvValue "DASHBOARD_PORT" "$configuredDashboardPort"
 
 Write-Host "Using Grafana host port: $selectedGrafanaPort"
+Write-Host "Using Dashboard host port: $configuredDashboardPort"
 Write-Host "Starting Docker Compose stack..."
 
 Push-Location $Root
@@ -127,6 +146,6 @@ finally {
 
 Write-Host ""
 Write-Host "Stack startup requested."
-Write-Host "Dashboard: http://localhost:8501"
+Write-Host "Dashboard: http://localhost:$configuredDashboardPort"
 Write-Host "Grafana:   http://localhost:$selectedGrafanaPort"
 Write-Host "InfluxDB:  http://localhost:8086"

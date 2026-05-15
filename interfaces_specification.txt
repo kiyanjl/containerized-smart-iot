@@ -64,7 +64,7 @@ dashboard
 - Streamlit operations UI
 - Polls Catalog, Controller, and Alert Service through REST
 - Opens/embeds Grafana for historical charts; Grafana queries InfluxDB directly
-- HTTP port 8501
+- HTTP port 18501 (host) -> 8501 (container)
 
 --------------------------------------------------
 3. MQTT TOPICS
@@ -329,5 +329,5 @@ From the host machine:
 - Controller Service: http://localhost:8001
 - InfluxDB: http://localhost:8086
 - Grafana: http://localhost:3900
-- Streamlit Dashboard: http://localhost:8501
+- Streamlit Dashboard: http://localhost:18501 (mappped to container 8501)
 - Telegram Bot: @smartwarehouse_alert_bot

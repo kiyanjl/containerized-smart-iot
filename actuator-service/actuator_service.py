@@ -135,9 +135,23 @@ class ActuatorService:
 
         if actions.get("fan") == "ON":
             print("Fan turned ON")
+        elif actions.get("fan") == "OFF":
+            print("Fan turned OFF")
+
+        if actions.get("heater") == "ON":
+            print("Heater turned ON")
+        elif actions.get("heater") == "OFF":
+            print("Heater turned OFF")
+
+        if actions.get("door") == "OPEN":
+            print("Door OPENED")
+        elif actions.get("door") == "CLOSE":
+            print("Door CLOSED")
 
         if actions.get("dehumidifier") == "ON":
             print("Dehumidifier turned ON")
+        elif actions.get("dehumidifier") == "OFF":
+            print("Dehumidifier turned OFF")
 
         if actions.get("restock_alert"):
             print("Restock alert triggered")

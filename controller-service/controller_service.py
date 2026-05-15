@@ -299,6 +299,7 @@ class SmartController:
             .field("temperature", float(data["temperature"]))
             .field("humidity", float(data["humidity"]))
             .field("stock", int(data["stock"]))
+            .field("door_open", int(data.get("door_open", 0)))
             .field("state_code", STATE_CODES.get(state, -1))
             .time(time.time_ns(), WritePrecision.NS)
         )
@@ -688,7 +689,13 @@ class RootAPI:
 
             allowed_actions = {
                 "fan_on": {"fan": "ON"},
+                "fan_off": {"fan": "OFF"},
                 "dehumidifier_on": {"dehumidifier": "ON"},
+                "dehumidifier_off": {"dehumidifier": "OFF"},
+                "heater_on": {"heater": "ON"},
+                "heater_off": {"heater": "OFF"},
+                "door_open": {"door": "OPEN"},
+                "door_close": {"door": "CLOSE"},
                 "pause_deliveries": {"pause_deliveries": True},
                 "restock_alert": {"restock_alert": True},
                 "emergency_shutdown": {"emergency_shutdown": True, "fan": "ON"},

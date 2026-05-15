@@ -174,15 +174,17 @@ services:
     container_name: dashboard
     restart: unless-stopped
     ports:
-      - "8501:8501"
+      - "${DASHBOARD_PORT:-18501}:8501"
     environment:
       CATALOG_URL: http://catalog-service:8080
       CONTROLLER_URL: http://controller-service:8001
+      ALERT_URL: http://alert-service:5002
       INFLUX_URL: http://influxdb:8086
       INFLUX_TOKEN: NnVSDg3Jxb8K1hpRyu8eMNCXf6Uix-T04fEti98mgN15sIjqn-qEWY8o72MLJwvVEZG1qG7ZD4cOlzL60Zyacg==
       INFLUX_ORG: smart-iot
       INFLUX_BUCKET: warehouse_metrics
       GRAFANA_PUBLIC_URL: http://localhost:${GRAFANA_PORT:-3100}
+      INFLUX_PUBLIC_URL: http://localhost:8086
     depends_on:
       controller-service:
         condition: service_healthy

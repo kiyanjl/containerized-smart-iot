@@ -70,7 +70,7 @@ Important diagram rule: Streamlit is not receiving pushed data through WebSocket
 | Alert Service | `alert-service/` | Telegram push alerts and human bot commands | internal only |
 | InfluxDB | managed image | Time-series storage | `8086` |
 | Grafana | `grafana/provisioning/` | Provisioned dashboards and annotations | `${GRAFANA_PORT:-3100}` |
-| Streamlit Dashboard | `dashboard/` | Operator UI that polls REST APIs and links to Grafana/InfluxDB | `8501` |
+| Streamlit Dashboard | `dashboard/` | Operator UI that polls REST APIs and links to Grafana/InfluxDB | `18501` |
 
 ## Repository map
 
@@ -197,7 +197,7 @@ docker compose down -v
 - Controller Service: `http://localhost:8001`
 - InfluxDB: `http://localhost:8086`
 - Grafana: `http://localhost:3100` by default, or the port configured as `GRAFANA_PORT` in `.env`
-- Streamlit Dashboard: `http://localhost:8501`
+- Streamlit Dashboard: `http://localhost:18501` (or your configured `DASHBOARD_PORT`)
 - Telegram Bot: `@smartwarehouse_alert_bot`
 
 Health endpoints:

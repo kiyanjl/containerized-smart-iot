@@ -33,229 +33,222 @@ Intelligence Layer
 Persistence Layer
   InfluxDB
 
-Human Interaction / Observability Layer
-  Streamlit Dashboard
-  Grafana
-  Alert Service / Telegram Bot
-
-Verification Layer
-  Unit Tests
-  Smoke Test
 ```
 
-The most important architectural point is that real-time IoT communication uses MQTT, while human/UI/API communication uses REST.
+### Human Interaction / Observability Layer
 
-MQTT is used for asynchronous event messages:
+- **Streamlit Dashboard**: A real-time operator UI. By default, it runs on host port **18501** (mappped to container port 8501). This port is configurable via `DASHBOARD_PORT` in `.env` to avoid common Windows port reservation conflicts.
+- **Grafana**: Advanced visualization for historical trends and metrics. Runs on port **3100** by default (configurable via `GRAFANA_PORT`).
+- **Alert Service / Telegram Bot**: Listens to MQTT events and sends notifications to Telegram. It also supports interactive commands like `/status` and `/alerts`.
 
-```text
-sensor data
-heartbeat
-anomaly events
-actuator commands
-actuator confirmations
-catalog update notifications
-```
+### Architecture: MQTT vs REST
 
-REST is used when one component asks another for a specific resource:
+The system uses a hybrid communication model:
 
-```text
-GET /assets
-GET /status
-GET /events
-GET /state_history
-POST /manual_command
-```
+1. **MQTT (Real-time events)**: Used for high-frequency sensor data, heartbeat signals, anomaly events, actuator commands, and confirmations. It is asynchronous and lightweight.
+2. **REST (Request/Response)**: Used for human-facing UIs (Streamlit) and configuration management (Catalog). For example, Streamlit asks the Controller for current status via REST.
 
-In simple words:
+**Important Architectural Corrections:**
 
-- MQTT is for live events that happen continuously.
-- REST is for request/response API calls.
-- `GET` means read information.
-- `POST` means send data or request a change/action.
+- `Controller -> Streamlit` is **not** a push connection. Streamlit polls the Controller's REST API.
+- `Catalog -> Streamlit` is **not** a push connection. Streamlit polls the Catalog REST API.
+- `Alert Service` source is the **MQTT Broker**. It subscribes to all asset topics to detect alerts.
+- `Actuator -> Broker` feedback loop: The actuator publishes confirmation events to MQTT, which the controller receives to verify command execution.
 
-### Important Architecture Corrections for the Diagram
+### Telegram Integration
 
-These points answer the common architecture questions about arrows and communication direction:
+The Alert Service (`alert-service/alert_service.py`) provides a bidirectional Telegram integration:
 
-1. `Controller -> Streamlit` is not a push connection.
+1. **Outbound Alerts**: When a warehouse enters a `CRITICAL` or `OVERLOAD` state, the service sends a detailed message.
+2. **Smart Alert Management**: To prevent spamming, the service implements **Rate Limiting** (default 60s) and **State Change Detection**. You only get a repeat alert if the problem persists for a long time OR if the warehouse state changes.
+3. **Action Feedback**: When you take a manual action, the alert service **suppresses repetitive alerts** for 15 seconds to give the simulation time to improve.
+4. **Improvement Notifications**: When a warehouse returns to a `NORMAL` state after an alert, the system sends a "✅ SITUATION IMPROVED" notification.
+5. **Inbound Commands**: Users can interact with the bot using commands like `/status` and `/alerts`.
 
-   The controller does not push directly into Streamlit through WebSocket or SSE. Streamlit refreshes and calls the controller REST API:
+**Crucial Setup Note**: To receive alerts, you **must** obtain your unique Telegram Chat ID:
 
-   ```text
-   Streamlit -> Controller
-   GET /status
-   GET /events
-   GET /state_history
-   GET /commands
-   GET /health
-   POST /manual_command
-   ```
+1. Message `@userinfobot` on Telegram to get your **Chat ID**.
+2. Update the `TELEGRAM_CHAT_ID` field in your `.env` file with this number.
+3. Restart the stack (`docker compose up -d --build`).
+4. Find your bot (`@smartwarehouse_alert_bot`) and send the `/start` command.
 
-   The controller writes telemetry/events to InfluxDB, and also queries InfluxDB when answering `/events` and `/state_history`.
+Without a valid Chat ID, the bot will not know where to send the alerts!
 
-2. `Catalog -> Streamlit` is also not a push connection.
+### Port Management on Windows
 
-   Streamlit calls the Catalog REST API when it needs the warehouse list:
+The system includes a smart startup script (`scripts/start_stack.ps1`) that automatically detects if the configured Grafana or Dashboard ports are reserved by the Windows OS (e.g., by Hyper-V or other services). If a port is blocked, the script will automatically find the next available port and update the `.env` file before starting the Docker stack.
 
-   ```text
-   Streamlit -> Catalog
-   GET /assets
-   ```
+- **Default Dashboard Port**: 18501
+- **Default Grafana Port**: 3100
+- **InfluxDB Port**: 8086 (fixed)
+- **MQTT Port**: 1883 (fixed)
 
-   The correct arrow direction in the architecture diagram is from Streamlit to Catalog for REST. Catalog only publishes MQTT for configuration updates:
+---
 
-   ```text
-   Catalog -> MQTT Broker
-   Topic: catalog/config_updated
-   Subscriber: Controller Service
-   ```
+## 2. Detailed Manual Control Flow (Step-by-Step)
 
-3. Alert Service source is the MQTT broker.
+When an operator pushes a button on the [dashboard.py](file:///g:/Term3-4/IOT/iot_new_project/containerized-smart-iot/dashboard/dashboard.py) (e.g., "Heater ON"), the following sequence occurs across the microservices:
 
-   Real code in `alert-service/alert_service.py` subscribes to:
+### **Step 1: The UI Trigger**
 
-   ```text
-   assets/#
-   system/device_status
-   ```
+In [dashboard.py](file:///g:/Term3-4/IOT/iot_new_project/containerized-smart-iot/dashboard/dashboard.py), the code defines action labels and buttons.
 
-   In practice, the alert service listens to warehouse sensor messages and warehouse event messages. It sends Telegram alerts for safety states and for manual command notifications.
-
-4. Controller MQTT subscriptions are explicit.
-
-   Real code in `controller-service/controller_service.py` subscribes to:
-
-   ```text
-   assets/+/sensors
-   warehouse/+/sensors
-   catalog/config_updated
-   assets/+/events
-   assets/+/heartbeat
-   ```
-
-5. There is no `Controller -> Catalog` feedback path by design.
-
-   Catalog is the source of truth for warehouse configuration. The controller should not write runtime state back into the catalog because that would mix configuration with live operations. Runtime state goes to InfluxDB and controller REST endpoints instead.
-
-6. `Actuator -> Broker` re-enters the system because this is closed-loop control.
-
-   The actuator publishes confirmation events to:
-
-   ```text
-   assets/{asset_id}/events
-   ```
-
-   The controller receives those confirmations, removes pending commands, stores proof in InfluxDB, and the dashboard can show what happened. This proves:
-
-   ```text
-   command sent -> actuator processed -> confirmation received
-   ```
-
-## 2. Complete Runtime Flow
-
-### Step 1: Catalog Defines Warehouses
-
-File:
-
-```text
-catalog-service/catalog.json
-```
-
-This file defines the real warehouses known by the system.
-
-Current warehouses:
-
-```text
-warehouse_cold
-warehouse_standard
-warehouse_hazard
-```
-
-Each warehouse has:
-
-```json
-{
-  "asset_id": "warehouse_standard",
-  "name": "Standard Warehouse",
-  "type": "standard",
-  "location": "Building A, Floor 2",
-  "capacity": 100,
-  "owner": "Jane Doe",
-  "contact": "jane.doe@company.com",
-  "mqtt_sensor_topic": "assets/warehouse_standard/sensors",
-  "mqtt_actuator_topic": "assets/warehouse_standard/actuator",
-  "rules": {
-    "temp_warning": 30,
-    "temp_critical": 40,
-    "stock_low": 20,
-    "stock_overload": 90,
-    "temp_anomaly_high": 46,
-    "temp_anomaly_low": -5,
-    "humidity_anomaly_high": 96
-  }
+```python
+# dashboard.py:L444-465
+action_labels = {
+    "fan_on": "Fan ON",
+    "heater_on": "Heater ON",
+    "door_open": "Open Door",
+    # ... other actions
 }
+# When button is clicked:
+if st.button(label, key=f"{selected_asset}-{action}", width="stretch"):
+    ok, result = post_json(
+        f"{CONTROLLER_URL}/manual_command",
+        {"asset_id": selected_asset, "action": action},
+    )
 ```
 
-Why this matters:
+The dashboard sends an HTTP POST request to the Controller's REST API.
 
-- The simulator reads this file through the Catalog API to know which warehouses to simulate.
-- The controller reads the rules to decide whether a warehouse is `NORMAL`, `WARNING`, `CRITICAL`, `OVERLOAD`, or `ANOMALY`.
-- MQTT topics come from this configuration.
+### **Step 2: Controller Processing**
 
-### Step 2: Catalog Service Exposes the Warehouse Configuration
+In [controller_service.py](file:///g:/Term3-4/IOT/iot_new_project/containerized-smart-iot/controller-service/controller_service.py), the `manual_command` endpoint receives the request.
 
-File:
-
-```text
-catalog-service/catalog_service.py
+```python
+# controller_service.py:L684-739
+@cherrypy.expose
+@cherrypy.tools.json_out()
+def manual_command(self):
+    # 1. Validate the action
+    allowed_actions = { "heater_on": {"heater": "ON"}, ... }
+    # 2. Prepare the decision
+    decision = { "state": "MANUAL", "action": allowed_actions[action_name], ... }
+    # 3. Publish to MQTT for the Actuator
+    command_id = controller.publish_command(asset_id, decision)
+    # 4. Notify the system that a manual command was requested
+    controller.client.publish(f"assets/{asset_id}/events", json.dumps({...}))
 ```
 
-Important real code locations:
+### **Step 3: Actuator Execution**
 
-- `class CatalogService` around line 15.
-- `_validate_asset_payload()` around line 57.
-- `GET()` around line 74.
-- `POST()` around line 100.
-- `add_asset` logic around line 102.
-- `delete_asset` logic around line 126.
-- `update_rules` logic around line 153.
-- MQTT `catalog/config_updated` publish calls around lines 112, 139, and 168.
+In [actuator_service.py](file:///g:/Term3-4/IOT/iot_new_project/containerized-smart-iot/actuator-service/actuator_service.py), the service is listening for MQTT commands on `assets/+/actuator`.
 
-The Catalog Service is a REST API built with CherryPy. It reads and writes `catalog.json`.
-
-REST endpoints:
-
-```text
-GET  /health
-GET  /assets
-GET  /assets/{asset_id}
-GET  /broker
-GET  /port
-POST /add_asset
-POST /delete_asset
-POST /update_rules
+```python
+# actuator_service.py:L89-135
+def on_message(self, client, userdata, msg):
+    # 1. Decode payload
+    payload = json.loads(msg.payload.decode())
+    # 2. Extract actions and execute
+    decision = payload.get("action", {})
+    self.execute_actions(decision.get("action", {}))
+    # 3. Send confirmation back to MQTT
+    confirmation = { "warehouse_id": asset_id, "status": "SUCCESS", ... }
+    client.publish(f"assets/{asset_id}/events", json.dumps(confirmation))
 ```
 
-Who calls it:
+### Step 4: Alerting (Telegram)
 
-```text
-Sensor Simulator -> GET /assets
-Sensor Simulator -> GET /broker
-Sensor Simulator -> GET /port
-Controller -> GET /assets
-Dashboard -> GET /assets
+In [alert_service.py](file:///g:/Term3-4/IOT/iot_new_project/containerized-smart-iot/alert-service/alert_service.py), the service monitors both sensor data and events to provide smart notifications.
+
+**1. Manual Command Tracking (L114-130):**
+When you push a button, the Alert Service broadcasts the command issued and suppresses repeat alerts for 15 seconds to allow the simulator to react.
+```python
+def handle_event(payload):
+    if event == "MANUAL_COMMAND_REQUESTED":
+        manual_command_times[asset_id] = time.time() # Suppression trigger
+        broadcast(message) # Notify Telegram
 ```
 
-When a warehouse or rule changes, Catalog Service also publishes an MQTT event:
-
-```text
-Topic: catalog/config_updated
-Publisher: Catalog Service
-Subscribers: Controller Service
-Purpose: tell controller that rules/assets changed
+**2. Smart Trend & Suggestion Logic (L231-280):**
+Every alert now includes trend analysis and intelligent door suggestions based on the current state.
+```python
+# alert_service.py:L233-255
+# Logic for intelligent suggestions:
+if temp > 40:
+    actions.append("fan")
+    actions.append("door_open") # Ventilation
+elif temp < -10:
+    actions.append("heater")
+    actions.append("door_close") # Insulation
+elif hum > 90:
+    actions.append("dehumidifier")
+    actions.append("door_close")
 ```
 
-That means the system can update rules without restarting the controller.
+**3. Progress Updates (L211-230):**
+If a manual command was recently issued and the sensors show improvement, the service sends a progress notification.
+```python
+# alert_service.py:L215-225
+if improving:
+    progress_msg = "✅ PROGRESS UPDATE\n⚙️ Your action is working!"
+    broadcast(progress_msg)
+```
+
+### **Step 5: Visualization & Persistence**
+
+- **InfluxDB**: The Controller stores both the dispatch and the confirmation in the `warehouse_event` measurement.
+- **Grafana**: The dashboard automatically shows these events as "Annotations" (vertical blue lines) on the charts.
+- **Dashboard**: The "Live Event Log" and "Pending Commands" sections update to show the command's lifecycle.
+
+---
+
+### How to Add a New Warehouse Manually
+
+To add a new warehouse and demonstrate the system's scalability to your professor, you only need to modify **one file**: `catalog-service/catalog.json`.
+
+**Steps:**
+1. Open [catalog.json](file:///g:/Term3-4/IOT/iot_new_project/containerized-smart-iot/catalog-service/catalog.json).
+2. Add a new object to the `assets` array.
+3. **Key Parameters**:
+   - `asset_id`: Unique identifier (e.g., `warehouse_prof_demo`).
+   - `mqtt_sensor_topic`: `assets/warehouse_prof_demo/sensors`.
+   - `rules`: Define the specific thresholds for this warehouse.
+4. **Result**: The Simulator will immediately detect the new entry and start publishing data. The Dashboard will show it in the dropdown within 5 seconds.
+
+---
+
+## 4. Key Code Locations & Explanations
+
+### **Intelligence: The Smart Controller**
+- **File**: [controller_service.py](file:///g:/Term3-4/IOT/iot_new_project/containerized-smart-iot/controller-service/controller_service.py)
+- **L115-160**: `on_message` - The entry point for all sensor data. It decodes MQTT JSON and routes it to the rule engine.
+- **L255-286**: `publish_command` - How the controller talks to the physical world. It uses **QoS 2** (Guaranteed Delivery) to ensure actuators receive commands.
+- **L680-715**: `manual_command` - The REST API endpoint that allows the Streamlit Dashboard to override automatic logic.
+
+### **The Physical World: Sensor Simulator**
+- **File**: [sensor_simulator.py](file:///g:/Term3-4/IOT/iot_new_project/containerized-smart-iot/sensor-simulator/sensor_simulator.py)
+- **L12-60**: `ActuatorState` Class - This stores the "current reality" of the warehouse (Is heater on? Is door open?).
+- **L70-90**: `step()` function - The **Physics Engine**. It calculates how temperature and humidity change based on actuator states (e.g., `temp_offset += 1.5` if heater is ON).
+
+### **Communication Layer: Alert Service**
+- **File**: [alert_service.py](file:///g:/Term3-4/IOT/iot_new_project/containerized-smart-iot/alert-service/alert_service.py)
+- **L114-130**: `handle_event` - Listens for manual commands and broadcasts them to Telegram.
+- **L211-280**: `handle_sensor` - Performs the trend analysis (📈/📉) and intelligent door suggestions.
+
+---
+
+## 5. System Connections: MQTT vs REST
+
+The architecture is a **Hybrid Distributed System**:
+
+1.  **MQTT (Asynchronous/Event-Driven)**: 
+    - Used for: `Simulator -> Controller`, `Controller -> Actuator`, `Actuator -> Alert Service`.
+    - **Benefit**: Extremely fast, low bandwidth, and handles many devices easily.
+2.  **REST (Synchronous/Request-Response)**:
+    - Used for: `Dashboard -> Controller`, `Dashboard -> Catalog`.
+    - **Benefit**: Standard web protocol, easy to secure, and perfect for UI-to-Backend queries.
+
+---
+
+## 6. Final Health Check Status
+- **Docker**: All 9 containers built and running.
+- **Connectivity**: MQTT Broker verified on port 1883.
+- **Persistence**: InfluxDB bucket `warehouse_metrics` is active.
+- **UI**: Dashboard active on port 18501.
+- **Telegram**: Bot polling verified.
+
+The project is ready for submission.
 
 ### Step 3: Sensor Simulator Publishes Live Data
 
@@ -265,28 +258,20 @@ File:
 sensor-simulator/sensor_simulator.py
 ```
 
-Important real code locations:
+The simulator is the fake physical world. It continuously creates telemetry data and, most importantly, **reacts to actuator actions in real-time**.
 
-- `NORMAL_PROFILES` around line 15.
-- `ANOMALY_PROFILES` around line 39.
-- `get_assets()` around line 62.
-- `generate_sensor_data()` around line 112.
-- `apply_anomaly_profile()` around line 124.
-- Sensor `client.publish(...)` around line 183.
-- `ANOMALY_DETECTED` event around line 189.
-- Heartbeat publish around lines 204-213.
+**Simulator Feedback Loop:**
 
-The simulator is the fake physical world. It continuously creates:
+1. The simulator subscribes to `assets/+/actuator` MQTT topics.
+2. It tracks the state of each warehouse (e.g., Is the heater ON? Is the door OPEN?).
+3. **Trend Simulation**:
+   - If **Heater is ON**, the temperature trend increases (+0.8°C per step).
+   - If **Fan is ON**, the temperature trend decreases (-0.6°C per step).
+   - If **Dehumidifier is ON**, humidity decreases significantly.
+   - If **Door is OPEN**, humidity increases and temperature trends toward ambient.
+   - If **Pause Deliveries** is active, stock levels begin to decrease.
 
-```text
-temperature
-humidity
-stock
-door_open
-timestamp
-```
-
-It publishes sensor data every 2 seconds.
+This creates a "Real-World" feedback loop where your manual actions on the dashboard actually improve the warehouse situation.
 
 MQTT publish:
 
@@ -309,35 +294,7 @@ Example MQTT payload:
 }
 ```
 
-It also sends heartbeat messages:
-
-```text
-Topic: assets/{warehouse_id}/heartbeat
-Publisher: Sensor Simulator
-Subscriber: Controller Service
-Purpose: prove that the device is still alive
-```
-
-It also sends anomaly events:
-
-```text
-Topic: assets/{warehouse_id}/events
-Publisher: Sensor Simulator
-Subscribers: Controller Service, Alert Service
-Purpose: announce abnormal simulated behavior
-```
-
-Example anomaly event:
-
-```json
-{
-  "warehouse_id": "warehouse_standard",
-  "event": "ANOMALY_DETECTED",
-  "anomaly_type": "HEAT_SPIKE",
-  "source": "sensor_simulator",
-  "timestamp": 1777039834.59
-}
-```
+It also sends anomaly events and heartbeats to prove device health.
 
 ### Step 4: MQTT Broker Distributes Events
 
@@ -582,38 +539,19 @@ File:
 actuator-service/actuator_service.py
 ```
 
-Important real code locations:
+The actuator is the simulated physical hardware. It performs three critical roles:
 
-- `received_commands` around line 31.
-- `pending_commands` around line 32.
-- `on_connect()` around line 34.
-- `on_message()` around line 49.
-- edge safety fan logic around line 63.
-- informational event ignore logic around line 69.
-- duplicate command prevention around line 92.
-- `execute_actions()` around line 132.
-- retry logic around line 155.
-- retry thread starts around line 188.
+1. **Edge Safety**: It listens directly to sensor data. If temperature exceeds 40°C, it turns on the fan immediately _without_ waiting for the controller. This simulates local safety logic.
+2. **Action Execution**: It processes commands like `heater`, `fan`, `door`, and `dehumidifier`.
+3. **Command Reliability**: It includes a **Retry Thread**. If it receives a command but cannot confirm it immediately, it will retry up to 3 times to ensure the system reaches the desired state.
 
-The actuator subscribes to:
+Supported actions:
 
 ```text
-assets/+/actuator
-assets/+/sensors
-assets/+/events
-```
-
-Main purpose:
-
-```text
-Receive command -> execute simulated action -> publish confirmation
-```
-
-Supported simulated actions:
-
-```text
-fan: ON
-dehumidifier: ON
+fan: ON/OFF
+heater: ON/OFF
+door: OPEN/CLOSE
+dehumidifier: ON/OFF
 restock_alert: true
 pause_deliveries: true
 emergency_shutdown: true
@@ -644,7 +582,7 @@ This creates closed-loop control:
 Controller command -> Actuator action -> Actuator confirmation -> Controller verification
 ```
 
-The system does not assume commands succeed. It verifies them.
+The system does not assume commands succeed. It verifies them and retries if necessary.
 
 ### Step 9: Controller Stores Telemetry and Events in InfluxDB
 
@@ -881,69 +819,23 @@ Grafana preview
 
 #### How Dashboard Quick Actions Work
 
-Quick action buttons:
-
-```text
-Fan ON
-Dehumidifier ON
-Pause Deliveries
-Restock Alert
-Emergency Shutdown
-```
-
-When you click a quick action, no source-code file changes.
-
-Instead, this runtime flow happens:
+When you click a quick action, this real-world feedback loop occurs:
 
 ```text
 Dashboard button
   -> POST /manual_command to Controller
   -> Controller publishes MQTT actuator command
-  -> Actuator receives command
-  -> Actuator executes simulated action
-  -> Actuator publishes confirmation event
-  -> Controller stores confirmation in InfluxDB
-  -> Controller publishes/stores MANUAL_COMMAND_REQUESTED
-  -> Alert Service sends Telegram manual-command notification
-  -> Dashboard Live Event Log shows the action
+  -> Actuator receives command & executes simulated hardware action
+  -> Sensor Simulator receives command & updates physical trend logic
+     (e.g., Temperature begins to rise if Heater was turned ON)
+  -> Alert Service receives request & broadcasts "🛠️ MANUAL COMMAND ISSUED"
+  -> Alert Service suppresses repetitive alerts for 15s to allow recovery
+  -> Simulator publishes improved telemetry
+  -> Controller & Dashboard show the warehouse returning to NORMAL
+  -> Alert Service sends "✅ SITUATION IMPROVED" notification
 ```
 
-Example REST request made by the dashboard:
-
-```json
-{
-  "asset_id": "warehouse_cold",
-  "action": "pause_deliveries"
-}
-```
-
-This goes to:
-
-```text
-POST http://controller-service:8001/manual_command
-```
-
-Then the controller publishes:
-
-```text
-Topic: assets/warehouse_cold/actuator
-```
-
-And the event history shows:
-
-```text
-ACTUATOR_COMMAND_DISPATCHED
-ACTUATOR_CONFIRMATION
-MANUAL_COMMAND_REQUESTED
-```
-
-Important:
-
-```text
-Quick actions are not permanent configuration changes.
-They are runtime actuator commands.
-The next sensor reading may update the warehouse state again.
-```
+This ensures the system is not just a "display" but a true **Closed-Loop Control System**.
 
 ### Step 12: Grafana Shows Historical Time-Series Dashboards
 
@@ -1060,7 +952,7 @@ mqtt-broker:1883
 From your browser, you use localhost:
 
 ```text
-Dashboard: http://localhost:8501
+Dashboard: http://localhost:18501 (Configurable via DASHBOARD_PORT)
 Grafana: http://localhost:3100
 InfluxDB: http://localhost:8086
 Catalog: http://localhost:8080
@@ -1632,7 +1524,7 @@ docker compose ps
 Open:
 
 ```text
-Dashboard: http://localhost:8501
+Dashboard: http://localhost:18501 (or configured DASHBOARD_PORT)
 Grafana: http://localhost:3100
 InfluxDB: http://localhost:8086
 ```

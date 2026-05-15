@@ -6,13 +6,16 @@ import pandas as pd
 import plotly.express as px
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 CATALOG_URL = os.environ.get("CATALOG_URL", "http://catalog-service:8080")
-CONTROLLER_URL = os.environ.get("CONTROLLER_URL", "http://controller-service:8001")
+CONTROLLER_URL = os.environ.get(
+    "CONTROLLER_URL", "http://controller-service:8001")
 ALERT_URL = os.environ.get("ALERT_URL", "http://alert-service:5002")
-GRAFANA_URL = os.environ.get("GRAFANA_PUBLIC_URL", "http://localhost:3900")
-INFLUX_PUBLIC_URL = os.environ.get("INFLUX_PUBLIC_URL", "http://localhost:8086")
+GRAFANA_URL = os.environ.get("GRAFANA_PUBLIC_URL", "http://localhost:3100")
+INFLUX_PUBLIC_URL = os.environ.get(
+    "INFLUX_PUBLIC_URL", "http://localhost:8086")
 GRAFANA_DASHBOARD_URL = f"{GRAFANA_URL}/d/warehouse-metrics/warehouse-metrics"
 
 STATE_STYLE = {
@@ -37,7 +40,8 @@ STATE_CODES = {
 }
 
 
-st.set_page_config(page_title="Smart Warehouse IoT", page_icon="🏭", layout="wide")
+st.set_page_config(page_title="Smart Warehouse IoT",
+                   page_icon="🏭", layout="wide")
 
 st.markdown(
     """
@@ -322,17 +326,20 @@ def event_console(events):
             f'<span class="event-source">{warehouse} · {source} {status}</span></div>'
         )
 
-    st.markdown(f'<div class="event-console">{"".join(rows)}</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="event-console">{"".join(rows)}</div>', unsafe_allow_html=True)
 
 
 def state_history_chart(states):
     if not states:
-        st.info("No state timeline data yet. Wait for the simulator to publish a few samples.")
+        st.info(
+            "No state timeline data yet. Wait for the simulator to publish a few samples.")
         return
 
     df = pd.DataFrame(states)
     df["time"] = pd.to_datetime(df["time"], errors="coerce")
-    df["state_code"] = df["state"].map(STATE_CODES).fillna(df.get("state_code", -1))
+    df["state_code"] = df["state"].map(
+        STATE_CODES).fillna(df.get("state_code", -1))
     df = df.dropna(subset=["time"]).sort_values("time")
     if df.empty:
         st.info("State history returned no usable timestamps yet.")
@@ -351,7 +358,8 @@ def state_history_chart(states):
     fig.update_yaxes(
         tickmode="array",
         tickvals=[0, 1, 2, 3, 4, 5],
-        ticktext=["NORMAL", "WARNING", "CRITICAL", "OVERLOAD", "ANOMALY", "MANUAL"],
+        ticktext=["NORMAL", "WARNING", "CRITICAL",
+                  "OVERLOAD", "ANOMALY", "MANUAL"],
     )
     fig.update_layout(
         height=340,
@@ -367,16 +375,21 @@ def state_history_chart(states):
 assets = get_json(f"{CATALOG_URL}/assets", [])
 if not assets:
     assets = [
-        {"asset_id": "warehouse_cold", "name": "Cold Storage Warehouse", "location": "Building A"},
-        {"asset_id": "warehouse_standard", "name": "Standard Warehouse", "location": "Building A"},
-        {"asset_id": "warehouse_hazard", "name": "Hazardous Materials Warehouse", "location": "Building B"},
+        {"asset_id": "warehouse_cold",
+            "name": "Cold Storage Warehouse", "location": "Building A"},
+        {"asset_id": "warehouse_standard",
+            "name": "Standard Warehouse", "location": "Building A"},
+        {"asset_id": "warehouse_hazard",
+            "name": "Hazardous Materials Warehouse", "location": "Building B"},
     ]
 
 status = get_json(f"{CONTROLLER_URL}/status", {})
 health = get_json(f"{CONTROLLER_URL}/health", {})
 commands = get_json(f"{CONTROLLER_URL}/commands", {})
-events, events_error = get_api_result(f"{CONTROLLER_URL}/events", "events", timeout=10)
-states, states_error = get_api_result(f"{CONTROLLER_URL}/state_history", "states", timeout=12)
+events, events_error = get_api_result(
+    f"{CONTROLLER_URL}/events", "events", timeout=10)
+states, states_error = get_api_result(
+    f"{CONTROLLER_URL}/state_history", "states", timeout=12)
 alerts = get_json(f"{ALERT_URL}/alerts", {}).get("alerts", [])
 alert_status = get_json(f"{ALERT_URL}/status", {})
 
@@ -398,12 +411,14 @@ with top2:
 with top3:
     kpi_card("Recent Events", len(events), "Influx event feed")
 with top4:
-    kpi_card("Pending Commands", commands.get("pending_confirmations", 0), "Awaiting actuator ACK")
+    kpi_card("Pending Commands", commands.get(
+        "pending_confirmations", 0), "Awaiting actuator ACK")
 
 link1, link2, link3, link4 = st.columns(4)
 link1.link_button("📊 Grafana", GRAFANA_DASHBOARD_URL, width="stretch")
 link2.link_button("💾 InfluxDB", INFLUX_PUBLIC_URL, width="stretch")
-link3.link_button("📚 Catalog API", "http://localhost:8080/assets", width="stretch")
+link3.link_button(
+    "📚 Catalog API", "http://localhost:8080/assets", width="stretch")
 if link4.button("🔄 Refresh", width="stretch"):
     st.rerun()
 
@@ -427,20 +442,32 @@ with right:
 
 st.subheader("Quick Actions")
 asset_options = [asset["asset_id"] for asset in assets]
+
+# Defined actions exactly once
 action_labels = {
     "fan_on": "Fan ON",
+    "fan_off": "Fan OFF",
+    "heater_on": "Heater ON",
+    "heater_off": "Heater OFF",
+    "door_open": "Open Door",
+    "door_close": "Close Door",
     "dehumidifier_on": "Dehumidifier ON",
+    "dehumidifier_off": "Dehumidifier OFF",
     "pause_deliveries": "Pause Deliveries",
     "restock_alert": "Restock Alert",
     "emergency_shutdown": "Emergency Shutdown",
 }
+
 control_col, pending_col = st.columns([1, 1])
 with control_col:
-    selected_asset = st.selectbox("Warehouse", asset_options, label_visibility="collapsed")
+    selected_asset = st.selectbox(
+        "Warehouse", asset_options, label_visibility="collapsed")
+    
+    # Render buttons in a clean grid
     button_cols = st.columns(3)
     for index, (action, label) in enumerate(action_labels.items()):
         with button_cols[index % 3]:
-            if st.button(label, key=f"{selected_asset}-{action}", width="stretch"):
+            if st.button(label, key=f"btn-{selected_asset}-{action}", width="stretch"):
                 ok, result = post_json(
                     f"{CONTROLLER_URL}/manual_command",
                     {"asset_id": selected_asset, "action": action},
@@ -460,7 +487,8 @@ with pending_col:
 st.subheader("Recent Alerts")
 if alerts:
     alert_df = pd.DataFrame(alerts[:20])
-    visible_columns = [col for col in ["time", "warehouse_id", "kind", "temperature", "humidity", "stock", "actions"] if col in alert_df.columns]
+    visible_columns = [col for col in ["time", "warehouse_id", "kind",
+                                       "temperature", "humidity", "stock", "actions"] if col in alert_df.columns]
     st.dataframe(alert_df[visible_columns], width="stretch", hide_index=True)
 else:
     st.success("No recent alerts. The alert feed is quiet.")
@@ -469,11 +497,16 @@ st.subheader("System Health")
 health_cols = st.columns(4)
 health_cols[0].json(health)
 health_cols[1].json(alert_status)
-health_cols[2].json({"grafana": GRAFANA_DASHBOARD_URL, "influxdb": INFLUX_PUBLIC_URL})
-health_cols[3].json({"controller": CONTROLLER_URL, "catalog": CATALOG_URL, "alert_service": ALERT_URL})
+health_cols[2].json({"grafana": GRAFANA_DASHBOARD_URL,
+                    "influxdb": INFLUX_PUBLIC_URL})
+health_cols[3].json({"controller": CONTROLLER_URL,
+                    "catalog": CATALOG_URL, "alert_service": ALERT_URL})
 
 with st.expander("Grafana Preview"):
-    st.iframe(GRAFANA_DASHBOARD_URL, height=520)
+    components.html(
+        f'<iframe src="{GRAFANA_DASHBOARD_URL}" height="520" width="100%" style="border:none;" seamless></iframe>',
+        height=550
+    )
 
 if st.toggle("Auto refresh every 5 seconds", value=True):
     time.sleep(5)

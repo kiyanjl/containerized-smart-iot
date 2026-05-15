@@ -52,11 +52,82 @@ ANOMALY_PROFILES = {
 }
 
 
+class ActuatorState:
+    def __init__(self):
+        self.fan = "OFF"
+        self.heater = "OFF"
+        self.dehumidifier = "OFF"
+        self.door = "CLOSE"
+        self.pause_deliveries = False
+        self.temp_offset = 0.0
+        self.humidity_offset = 0.0
+        self.stock_trend = 0.5  # Natural growth
+
+    def update(self, action):
+        if "fan" in action:
+            self.fan = action["fan"]
+        if "heater" in action:
+            self.heater = action["heater"]
+        if "dehumidifier" in action:
+            self.dehumidifier = action["dehumidifier"]
+        if "door" in action:
+            self.door = action["door"]
+        if "pause_deliveries" in action:
+            self.pause_deliveries = action["pause_deliveries"]
+
+    def step(self):
+        # Temperature effects
+        if self.heater == "ON":
+            self.temp_offset += 1.5  # Faster heating
+        elif self.fan == "ON":
+            self.temp_offset -= 1.2  # Faster cooling
+        else:
+            # Gradually return to 0 (ambient) - slightly faster ambient return
+            self.temp_offset *= 0.90
+
+        # Humidity effects
+        if self.dehumidifier == "ON":
+            self.humidity_offset -= 2.0  # Faster drying
+        elif self.door == "OPEN":
+            self.humidity_offset += 0.8  # Door open raises humidity
+        else:
+            self.humidity_offset *= 0.92
+
+        # Limit offsets to realistic ranges
+        self.temp_offset = max(-30.0, min(70.0, self.temp_offset))
+        self.humidity_offset = max(-50.0, min(50.0, self.humidity_offset))
+
+
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
         print("Sensor connected to MQTT broker")
+        client.subscribe("assets/+/actuator")
+        client.subscribe("assets/+/events")
     else:
         print("MQTT connection failed:", rc)
+
+
+def on_message(client, userdata, msg):
+    try:
+        payload = json.loads(msg.payload.decode())
+        asset_id = msg.topic.split("/")[1]
+        
+        # We need access to actuator_states
+        states = userdata["actuator_states"]
+        state = states.setdefault(asset_id, ActuatorState())
+
+        if msg.topic.endswith("/actuator"):
+            action = payload.get("action", {}).get("action", {})
+            state.update(action)
+            print(f"Simulator: Updated actuator state for {asset_id}: {action}")
+        
+        elif msg.topic.endswith("/events"):
+            # Actuator confirmations also update state
+            if payload.get("status") == "SUCCESS":
+                # For manual commands, the status might contain the action
+                pass # Already handled by /actuator topic usually
+    except Exception as e:
+        print(f"Simulator MQTT error: {e}")
 
 
 def get_assets():
@@ -109,14 +180,29 @@ class AnomalyState:
         return profile
 
 
-def generate_sensor_data(asset):
+def generate_sensor_data(asset, actuator_state):
     profile = NORMAL_PROFILES.get(asset["asset_id"], DEFAULT_NORMAL_PROFILE)
+    
+    # Base values
+    temp = random.uniform(*profile["temperature"]) + actuator_state.temp_offset
+    hum = random.uniform(*profile["humidity"]) + actuator_state.humidity_offset
+    
+    # Stock logic
+    stock = profile.get("_last_stock", random.randint(*profile["stock"]))
+    if not actuator_state.pause_deliveries:
+        stock += random.randint(0, 3)
+    else:
+        stock -= random.randint(0, 2)
+    
+    stock = max(5, min(100, stock))
+    profile["_last_stock"] = stock
+
     return {
         "warehouse_id": asset["asset_id"],
-        "temperature": round(random.uniform(*profile["temperature"]), 1),
-        "humidity": round(random.uniform(*profile["humidity"]), 1),
-        "stock": random.randint(*profile["stock"]),
-        "door_open": random.choice([0, 1]),
+        "temperature": round(temp, 1),
+        "humidity": round(hum, 1),
+        "stock": stock,
+        "door_open": 1 if actuator_state.door == "OPEN" else 0,
         "timestamp": time.time(),
     }
 
@@ -137,7 +223,9 @@ def apply_anomaly_profile(payload, profile):
 
 def main():
     broker, port = get_broker()
-    client = mqtt.Client(client_id="sensor_simulator")
+    actuator_states = {}
+    
+    client = mqtt.Client(client_id="sensor_simulator", userdata={"actuator_states": actuator_states})
     client.will_set(
         "system/device_status",
         json.dumps({"status": "sensor_offline"}),
@@ -145,6 +233,8 @@ def main():
         retain=True,
     )
     client.on_connect = on_connect
+    client.on_message = on_message
+    
     client.connect(broker, port, 60)
     client.loop_start()
 
@@ -172,16 +262,21 @@ def main():
         for asset in assets:
             asset_id = asset["asset_id"]
             state = anomaly_states.setdefault(asset_id, AnomalyState())
+            act_state = actuator_states.setdefault(asset_id, ActuatorState())
+            
+            # Step the simulation for this asset
+            act_state.step()
+            
             topic = asset.get("mqtt_sensor_topic", f"assets/{asset_id}/sensors")
 
-            payload = generate_sensor_data(asset)
+            payload = generate_sensor_data(asset, act_state)
             burst_started = state.maybe_start(asset_id)
             anomaly_profile = state.consume()
             if anomaly_profile:
                 payload = apply_anomaly_profile(payload, anomaly_profile)
 
             client.publish(topic, json.dumps(payload), qos=1)
-            print(f"Published to {topic}: {payload}")
+            # print(f"Published to {topic}: {payload}")
 
             if anomaly_profile and burst_started:
                 event_payload = {
