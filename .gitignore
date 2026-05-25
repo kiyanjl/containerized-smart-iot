@@ -26,3 +26,13 @@ mqtt-broker/data/
 mqtt-broker/log/
 *.bak
 *.backup
+
+# Private Documentation (kept locally only)
+SYSTEM_EXPLANATION.md
+PRESENTATION_SECTION_1.md
+PRESENTATION_SECTION_2.md
+PRESENTATION_SECTION_3.md
+DELIVERY_CHECKLIST.md
+DEPLOYMENT_GUIDE.md
+PROJECT_STATUS.md
+QUICKSTART.md
