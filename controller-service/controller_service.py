@@ -56,8 +56,8 @@ class SmartController:
 
         # ✅ FIX #1: Add resilience data structures
         self.pending_confirmations = {}  # Track commands waiting for ACK
-        self.influx_write_queue = []     # Queue failed InfluxDB writes
-        self.lock = threading.Lock()     # Thread-safe access
+        self.influx_write_queue = []  # Queue failed InfluxDB writes
+        self.lock = threading.Lock()  # Thread-safe access
 
         self.bootstrap_rules_from_catalog()
 
@@ -487,7 +487,7 @@ class SmartController:
                 with self.lock:
                     for asset in assets:
                         self.rules_cache[asset["asset_id"]
-                                         ] = asset.get("rules", {})
+                        ] = asset.get("rules", {})
 
                 self.save_rules_cache()
                 print(f"✓ Rules synced from catalog ({len(assets)} assets)")
@@ -566,7 +566,7 @@ class RootAPI:
             return {"success": True, "asset_id": asset_id}
         except Exception as exc:
             return {"error": str(exc)}
-            
+
     @cherrypy.expose
     @cherrypy.tools.json_out()
     def events(self):
@@ -590,7 +590,7 @@ class RootAPI:
                 query,
                 org=INFLUX_ORG,
             )
-            
+
             events = []
             for table in result:
                 for record in table.records:
@@ -604,11 +604,11 @@ class RootAPI:
                         "status": record.values.get("status"),
                         "value": record.get_value()
                     })
-            
+
             return {"events": events}
         except Exception as exc:
             return {"error": str(exc)}
-            
+
     @cherrypy.expose
     @cherrypy.tools.json_out()
     def state_history(self, asset_id=None):
@@ -638,7 +638,7 @@ class RootAPI:
                 query,
                 org=INFLUX_ORG,
             )
-            
+
             states = []
             for table in result:
                 for record in table.records:
@@ -651,11 +651,11 @@ class RootAPI:
                         "stock": record.values.get("stock"),
                         "state_code": record.values.get("state_code")
                     })
-            
+
             return {"states": states}
         except Exception as exc:
             return {"error": str(exc)}
-            
+
     @cherrypy.expose
     @cherrypy.tools.json_out()
     def commands(self):
@@ -670,7 +670,7 @@ class RootAPI:
                     "sent_at": info["sent_at"],
                     "elapsed": time.time() - info["sent_at"]
                 })
-                
+
         return {
             "pending_confirmations": len(pending),
             "pending_commands": pending,

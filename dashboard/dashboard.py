@@ -495,12 +495,49 @@ else:
 
 st.subheader("System Health")
 health_cols = st.columns(4)
-health_cols[0].json(health)
-health_cols[1].json(alert_status)
-health_cols[2].json({"grafana": GRAFANA_DASHBOARD_URL,
-                    "influxdb": INFLUX_PUBLIC_URL})
-health_cols[3].json({"controller": CONTROLLER_URL,
-                    "catalog": CATALOG_URL, "alert_service": ALERT_URL})
+with health_cols[0]:
+    # Controller Status
+    if health.get("status") == "ok":
+        st.success("✅ Smart Controller", icon="🏭")
+        st.metric("Health", "Healthy", delta="Connected", delta_color="normal")
+    else:
+        st.error("❌ Smart Controller", icon="🏭")
+        st.metric("Health", "Unhealthy", delta="", delta_color="inverse")
+with health_cols[1]:
+    # Alert Service Status
+    alert_configured = alert_status.get("telegram_configured", False)
+    warehouses_active = alert_status.get("warehouses_active", 0)
+    if alert_configured:
+        st.success("✅ Alert & Telegram Bot", icon="📱")
+        st.metric("Status", "Active", delta=f"{warehouses_active} warehouses active", delta_color="normal")
+    else:
+        st.warning("⚠️ Alert Service", icon="📱")
+        st.metric("Status", "Active", delta="Telegram not configured", delta_color="off")
+with health_cols[2]:
+    # Grafana & InfluxDB
+    st.info("🎨 Visualization & Storage", icon="📊")
+    st.metric("Grafana", "Online", delta="Connected", delta_color="normal")
+with health_cols[3]:
+    # Catalog & MQTT
+    st.info("🗂️ Registry & Bus", icon="🔗")
+    st.metric("Catalog", "Online", delta="Connected", delta_color="normal")
+
+# Add Warehouse List to System Health
+st.subheader("Active Warehouses")
+warehouse_cols = st.columns(min(3, len(assets)))
+for i, asset in enumerate(assets):
+    with warehouse_cols[i % 3]:
+        asset_id = asset.get("asset_id")
+        asset_status = status.get(asset_id, {})
+        state = asset_status.get("state", "UNKNOWN")
+        state_icon = "🟢" if state == "NORMAL" else "🟡" if state in ["WARNING", "OVERLOAD"] else "🔴"
+        st.markdown(f"""
+        <div style="padding:10px; border-radius:8px; margin-bottom:8px; border:1px solid #444;">
+            <strong>{state_icon} {asset.get('name', asset_id)}</strong><br>
+            <small style="color:#888;">{asset.get('location', '')} ({asset_id})</small><br>
+            <small>Current state: {state}</small>
+        </div>
+        """, unsafe_allow_html=True)
 
 with st.expander("Grafana Preview"):
     components.html(
