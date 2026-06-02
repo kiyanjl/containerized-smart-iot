@@ -181,7 +181,18 @@ class AnomalyState:
 
 
 def generate_sensor_data(asset, actuator_state):
-    profile = NORMAL_PROFILES.get(asset["asset_id"], DEFAULT_NORMAL_PROFILE)
+    # Get profile based on warehouse type or asset_id
+    asset_type = asset.get("type", "standard")
+    
+    # Type-based profiles
+    type_profiles = {
+        "cold": {"temperature": (2, 7), "humidity": (55, 80), "stock": (35, 95)},
+        "standard": {"temperature": (18, 28), "humidity": (35, 75), "stock": (10, 85)},
+        "hazard": {"temperature": (12, 19), "humidity": (30, 65), "stock": (10, 80)},
+    }
+    
+    # First try asset_id, then type, then default
+    profile = NORMAL_PROFILES.get(asset["asset_id"], type_profiles.get(asset_type, DEFAULT_NORMAL_PROFILE))
     
     # Base values
     temp = random.uniform(*profile["temperature"]) + actuator_state.temp_offset

@@ -60,25 +60,28 @@ Important diagram rule: Streamlit is not receiving pushed data through WebSocket
 
 ## Services and responsibilities
 
-| Service | Path | Responsibility | Port |
-| --- | --- | --- | --- |
-| MQTT Broker | `mqtt-broker/` | Message transport for telemetry, events, heartbeat, and actuation | `1883` |
-| Catalog Service | `catalog-service/` | Source of truth for warehouse registry and thresholds | `8080` |
-| Sensor Simulator | `sensor-simulator/` | Publishes warehouse telemetry and anomaly bursts | internal only |
-| Smart Controller | `controller-service/` | Rule engine, MQTT orchestrator, InfluxDB writer | `8001` |
-| Actuator Service | `actuator-service/` | Simulated device actions and confirmation events | internal only |
-| Alert Service | `alert-service/` | Telegram push alerts and human bot commands | internal only |
-| InfluxDB | managed image | Time-series storage | `8086` |
-| Grafana | `grafana/provisioning/` | Provisioned dashboards and annotations | `${GRAFANA_PORT:-3100}` |
-| Streamlit Dashboard | `dashboard/` | Operator UI that polls REST APIs and links to Grafana/InfluxDB | `18501` |
+| Service             | Path                    | Responsibility                                                    | Port                            |
+| ------------------- | ----------------------- | ----------------------------------------------------------------- | ------------------------------- |
+| MQTT Broker         | `mqtt-broker/`          | Message transport for telemetry, events, heartbeat, and actuation | `${MQTT_HOST_PORT:-1883}`       |
+| Catalog Service     | `catalog-service/`      | Source of truth for warehouse registry and thresholds             | `${CATALOG_HOST_PORT:-8080}`    |
+| Sensor Simulator    | `sensor-simulator/`     | Publishes warehouse telemetry and anomaly bursts                  | internal only                   |
+| Smart Controller    | `controller-service/`   | Rule engine, MQTT orchestrator, InfluxDB writer                   | `${CONTROLLER_HOST_PORT:-8001}` |
+| Actuator Service    | `actuator-service/`     | Simulated device actions and confirmation events                  | internal only                   |
+| Alert Service       | `alert-service/`        | Telegram push alerts and human bot commands                       | `${ALERT_HOST_PORT:-5002}`      |
+| InfluxDB            | managed image           | Time-series storage                                               | `${INFLUXDB_HOST_PORT:-8086}`   |
+| Grafana             | `grafana/provisioning/` | Provisioned dashboards and annotations                            | `${GRAFANA_PORT:-3100}`         |
+| Streamlit Dashboard | `dashboard/`            | Operator UI that polls REST APIs and links to Grafana/InfluxDB    | `${DASHBOARD_PORT:-18501}`      |
 
 ## Repository map
 
 ```text
 .
 |- docker-compose.yml
+|- .env.example
 |- interfaces_specification.txt
 |- README.md
+|- get_chat_id.py
+|- manage_warehouses.py
 |- scripts/
 |  |- smoke_test.py
 |- tests/
@@ -123,11 +126,30 @@ Important diagram rule: Streamlit is not receiving pushed data through WebSocket
    |- influxdb.env
 ```
 
+## Helper Scripts
+
+### `get_chat_id.py`
+
+Helps you retrieve your Telegram chat ID to configure the alert service:
+
+1. Send `/start` to your Telegram bot
+2. Run: `python get_chat_id.py`
+3. Copy the chat ID into your `.env` file
+
+### `manage_warehouses.py`
+
+Demonstrates how to dynamically add new warehouses to the catalog:
+
+- Lists current warehouses
+- Adds a new example warehouse
+- The sensor simulator will automatically start simulating the new warehouse!
+
 ## MQTT contract
 
 See [interfaces_specification.txt](./interfaces_specification.txt) for the complete contract.
 
 Main topics:
+
 - `assets/{asset_id}/sensors`
 - `assets/{asset_id}/actuator`
 - `assets/{asset_id}/events`
@@ -135,18 +157,23 @@ Main topics:
 - `catalog/config_updated`
 
 Telegram commands:
-- `/start`
-- `/status`
-- `/alerts`
-- `/subscribe`
-- `/unsubscribe`
-- `/help`
+
+- `/start` - Welcome message and subscribe to alerts
+- `/help` - Show available commands
+- `/status` - System status overview
+- `/warehouses` - List all warehouses with live data
+- `/alerts` - Show recent alerts
+- `/subscribe` - Subscribe to alerts
+- `/unsubscribe` - Unsubscribe from alerts
+- `/mute <minutes>` - Mute alerts for N minutes (default: 10)
+- `/unmute` - Unmute alerts immediately
 
 ## InfluxDB schema
 
 Bucket: `warehouse_metrics`
 
 Measurements:
+
 - `warehouse`: telemetry plus controller state
 - `warehouse_event`: anomaly events, device events, actuator command dispatches, actuator confirmations
 - `device_health`: online/offline time series and last-seen age
@@ -193,19 +220,20 @@ docker compose down -v
 
 ## Health and operator URLs
 
-- Catalog Service: `http://localhost:8080`
-- Controller Service: `http://localhost:8001`
-- InfluxDB: `http://localhost:8086`
-- Grafana: `http://localhost:3100` by default, or the port configured as `GRAFANA_PORT` in `.env`
-- Streamlit Dashboard: `http://localhost:18501` (or your configured `DASHBOARD_PORT`)
+- Catalog Service: `http://localhost:${CATALOG_HOST_PORT:-8080}`
+- Controller Service: `http://localhost:${CONTROLLER_HOST_PORT:-8001}`
+- InfluxDB: `http://localhost:${INFLUXDB_HOST_PORT:-8086}`
+- Grafana: `http://localhost:${GRAFANA_PORT:-3100}` by default, or the port configured as `GRAFANA_PORT` in `.env`
+- Streamlit Dashboard: `http://localhost:${DASHBOARD_PORT:-18501}` (or your configured `DASHBOARD_PORT`)
 - Telegram Bot: `@smartwarehouse_alert_bot`
 
 Health endpoints:
-- Catalog: `http://localhost:8080/health`
-- Controller: `http://localhost:8001/health`
-- Dashboard: `http://localhost:8501/_stcore/health`
-- Grafana: `http://localhost:3100/api/health` by default, or `http://localhost:{GRAFANA_PORT}/api/health`
-- InfluxDB: `http://localhost:8086/health`
+
+- Catalog: `http://localhost:${CATALOG_HOST_PORT:-8080}/health`
+- Controller: `http://localhost:${CONTROLLER_HOST_PORT:-8001}/health`
+- Dashboard: `http://localhost:${DASHBOARD_PORT:-18501}/_stcore/health`
+- Grafana: `http://localhost:${GRAFANA_PORT:-3100}/api/health` by default, or `http://localhost:{GRAFANA_PORT}/api/health`
+- InfluxDB: `http://localhost:${INFLUXDB_HOST_PORT:-8086}/health`
 
 ## Automated verification
 
@@ -220,6 +248,7 @@ python -m unittest discover -s tests -p "test_*.py"
 ### Smoke test
 
 This checks the running stack and proves the full control loop:
+
 - required services are running
 - Catalog and Controller APIs respond
 - Grafana and Streamlit are healthy
@@ -286,11 +315,13 @@ The Telegram bot currently supports `/start`, `/status`, `/alerts`, `/subscribe`
 This repository is optimized for a coursework demo, not production hardening.
 
 Demo-friendly choices:
+
 - anonymous Grafana viewer mode for embedding in Streamlit
 - open local MQTT broker with anonymous access
 - tokens kept in compose for reproducibility
 
 If you want to productionize it later, the next steps are:
+
 - move secrets to an `.env` file or secret manager
 - secure MQTT with auth/TLS
 - remove anonymous Grafana access

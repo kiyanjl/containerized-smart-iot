@@ -18,12 +18,12 @@ TELEGRAM_API_BASE = "https://api.telegram.org/bot"
 alert_history = []
 latest_sensor = {}
 subscribers = {}
-last_alert_time = {}  # Track last alert per warehouse
-last_alert_state = {} # Track last alert state per warehouse
-manual_command_times = {} # Track when manual command was issued per warehouse
-last_sensor_values = {} # Track last sensor readings for trending
+last_alert_time = {}
+last_alert_state = {}
+manual_command_times = {}
+last_sensor_values = {}
+muted_until = {}
 
-# Configurable rate limit (seconds)
 ALERT_RATE_LIMIT = int(os.environ.get("ALERT_RATE_LIMIT", 60))
 
 class Handler(BaseHTTPRequestHandler):
@@ -38,13 +38,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             self.send_response(200)
+            self.send_header("Content-type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"status": "healthy"}).encode())
         elif self.path == "/alerts":
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps({"alerts": list(reversed(alert_history))}).encode())
+            self.wfile.write(json.dumps({"alerts": list(reversed(alert_history[-50:]))}).encode())
         elif self.path == "/status":
             self.send_response(200)
             self.send_header("Content-type", "application/json")
@@ -60,6 +61,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"error": "Not found"}).encode())
+    
+    def log_message(self, format, *args):
+        pass
 
 def send_telegram(chat_id, text):
     if not TELEGRAM_TOKEN:
@@ -70,20 +74,27 @@ def send_telegram(chat_id, text):
         if not response.ok:
             print(f"Telegram API error: {response.text}")
         return response.ok
-    except Exception as exc:
-        print(f"Telegram send failed: {exc}")
+    except Exception as e:
+        print(f"Telegram send failed: {e}")
         return False
 
 def broadcast(msg):
-    targets = [cid for cid, info in subscribers.items() if info.get("subscribed")]
-    if TELEGRAM_CHAT_ID and str(TELEGRAM_CHAT_ID) not in targets:
+    targets = []
+    if TELEGRAM_CHAT_ID:
         targets.append(str(TELEGRAM_CHAT_ID))
+    for cid in subscribers:
+        if subscribers[cid].get("subscribed", True) and cid not in targets:
+            targets.append(cid)
     
     if not targets:
         print("No Telegram targets to broadcast to")
         return
-
+    
     for cid in targets:
+        now = time.time()
+        if cid in muted_until and muted_until[cid] > now:
+            print(f"Skipping broadcast to {cid} (muted)")
+            continue
         success = send_telegram(cid, msg)
         if success:
             print(f"Broadcast sent to {cid}")
@@ -94,14 +105,13 @@ def handle_event(payload):
     event = payload.get("event")
     if event != "MANUAL_COMMAND_REQUESTED":
         return
-
+    
     asset_id = payload.get("warehouse_id", "unknown")
     action = payload.get("status", "manual_action")
     command_id = payload.get("command_id", "")
     timestamp = payload.get("timestamp", time.time())
     time_str = datetime.fromtimestamp(float(timestamp), tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     
-    # Prettier action name
     display_action = action.replace("_", " ").title()
     
     message = (
@@ -114,7 +124,6 @@ def handle_event(payload):
     )
     print(f"MANUAL COMMAND BROADCAST: {asset_id} -> {action}")
     
-    # Store in history
     alert_history.append({
         "time": time_str,
         "warehouse_id": asset_id,
@@ -124,9 +133,42 @@ def handle_event(payload):
         "actions": [action],
     })
     
-    # Always broadcast manual commands
     manual_command_times[asset_id] = time.time()
     broadcast(message)
+
+def get_warehouse_list():
+    try:
+        assets = []
+        try:
+            response = requests.get("http://catalog-service:8080/assets", timeout=5)
+            response.raise_for_status()
+            assets = response.json()
+        except Exception:
+            pass
+        
+        if not assets:
+            return "⚠️ No warehouses found in catalog"
+        
+        msg = "🏭 Active Warehouses:\n\n"
+        for asset in assets:
+            aid = asset["asset_id"]
+            name = asset["name"]
+            state = latest_sensor.get(aid, {}).get("state", "UNKNOWN")
+            temp = latest_sensor.get(aid, {}).get("temperature", "N/A")
+            hum = latest_sensor.get(aid, {}).get("humidity", "N/A")
+            stock = latest_sensor.get(aid, {}).get("stock", "N/A")
+            
+            msg += f"• {name} ({aid})\n"
+            if temp != "N/A":
+                msg += f"  🌡️ Temp: {temp}°C\n"
+            if hum != "N/A":
+                msg += f"  💧 Humidity: {hum}%\n"
+            if stock != "N/A":
+                msg += f"  📦 Stock: {stock}%\n"
+            msg += "\n"
+        return msg
+    except Exception as e:
+        return f"❌ Failed to get warehouse list: {e}"
 
 def telegram_poll():
     if not TELEGRAM_TOKEN:
@@ -138,66 +180,136 @@ def telegram_poll():
             print("Telegram bot verified")
         else:
             print(f"Telegram bot verification failed: {resp.text[:200]}")
-    except Exception as exc:
-        print(f"Telegram bot verification failed: {exc}")
+    except Exception as e:
+        print(f"Telegram bot verification failed: {e}")
+    
     print("Telegram command polling started")
     offset = None
     while True:
         try:
             url = f"{TELEGRAM_API_BASE}{TELEGRAM_TOKEN}/getUpdates"
-            resp = requests.get(url, params={"offset": offset, "limit": 100}, timeout=30)
+            resp = requests.get(url, params={"offset": offset, "limit": 100, "timeout": 30}, timeout=35)
             for update in resp.json().get("result", []):
                 offset = update["update_id"] + 1
                 msg = update.get("message", {})
                 chat = msg.get("chat", {})
-                chat_id = chat.get("id")
+                chat_id = str(chat.get("id"))
                 text = msg.get("text", "").lower().strip()
-                name = chat.get("first_name", "user")
-                if not chat_id:
-                    continue
-                subscribers[str(chat_id)] = {"name": name, "subscribed": True}
+                first_name = chat.get("first_name", "User")
+                
+                if chat_id not in subscribers:
+                    subscribers[chat_id] = {"name": first_name, "subscribed": True}
+                
+                response_text = ""
                 
                 if text == "/start":
-                    welcome = f"Welcome {name}! You will receive CRITICAL and OVERLOAD alerts. Commands: /status /alerts /subscribe /unsubscribe /help"
-                    send_telegram(chat_id, welcome)
+                    response_text = (
+                        f"👋 Welcome {first_name}!\n\n"
+                        f"You will now receive all warehouse alerts.\n\n"
+                        f"📋 Available Commands:\n"
+                        f"/status - System status\n"
+                        f"/warehouses - List all warehouses\n"
+                        f"/alerts - Recent alerts\n"
+                        f"/subscribe - Enable alerts\n"
+                        f"/unsubscribe - Disable alerts\n"
+                        f"/mute <minutes> - Mute alerts\n"
+                        f"/unmute - Unmute alerts\n"
+                        f"/help - Show this help"
+                    )
+                    subscribers[chat_id]["subscribed"] = True
+                
                 elif text == "/help":
-                    help_text = "/start - Welcome\n/status - System status\n/alerts - Recent alerts\n/subscribe - Enable alerts\n/unsubscribe - Disable alerts\n/help - This message"
-                    send_telegram(chat_id, help_text)
+                    response_text = (
+                        "📋 Available Commands:\n\n"
+                        "/status - System status overview\n"
+                        "/warehouses - List all warehouses\n"
+                        "/alerts - Show recent alerts\n"
+                        "/subscribe - Enable all alerts\n"
+                        "/unsubscribe - Disable all alerts\n"
+                        "/mute <minutes> - Mute alerts for N minutes\n"
+                        "/unmute - Unmute alerts immediately\n"
+                        "/help - Show this help message"
+                    )
+                
                 elif text == "/status":
-                    status = f"{len(latest_sensor)} warehouses active, {len(alert_history)} total alerts"
-                    send_telegram(chat_id, status)
+                    num_warehouses = len(latest_sensor)
+                    num_alerts = len(alert_history)
+                    response_text = (
+                        "📊 System Status:\n\n"
+                        f"🏭 Warehouses Active: {num_warehouses}\n"
+                        f"🔔 Total Alerts: {num_alerts}\n"
+                        f"📱 Subscribers: {len(subscribers)}\n"
+                        f"✅ System: Healthy"
+                    )
+                
+                elif text == "/warehouses":
+                    response_text = get_warehouse_list()
+                
                 elif text == "/alerts":
                     if not alert_history:
-                        send_telegram(chat_id, "No alerts yet")
+                        response_text = "✅ No alerts yet - everything is quiet!"
                     else:
                         recent = alert_history[-10:][::-1]
-                        msg_text = "Recent alerts:\n"
+                        response_text = "🔔 Recent Alerts:\n\n"
                         for alert in recent:
-                            msg_text += f"[{alert['kind']}] {alert['message'][:50]}...\n"
-                        send_telegram(chat_id, msg_text)
+                            response_text += f"⏰ {alert['time']}\n"
+                            response_text += f"📍 {alert['warehouse_id']}\n"
+                            response_text += f"📌 {alert['kind']}\n"
+                            response_text += "---\n"
+                
+                elif text.startswith("/mute"):
+                    parts = text.split()
+                    minutes = 10
+                    if len(parts) > 1:
+                        try:
+                            minutes = int(parts[1])
+                        except ValueError:
+                            minutes = 10
+                    muted_until[chat_id] = time.time() + (minutes * 60)
+                    response_text = f"🔇 Alerts muted for {minutes} minutes"
+                
+                elif text == "/unmute":
+                    if chat_id in muted_until:
+                        del muted_until[chat_id]
+                    response_text = "🔊 Alerts unmuted!"
+                
                 elif text == "/subscribe":
-                    subscribers[str(chat_id)]["subscribed"] = True
-                    send_telegram(chat_id, "Subscribed to alerts!")
+                    subscribers[chat_id]["subscribed"] = True
+                    response_text = "✅ Subscribed to alerts!"
+                
                 elif text == "/unsubscribe":
-                    subscribers[str(chat_id)]["subscribed"] = False
-                    send_telegram(chat_id, "Unsubscribed from alerts")
+                    subscribers[chat_id]["subscribed"] = False
+                    response_text = "❌ Unsubscribed from alerts"
+                
+                elif "pause bot" in text:
+                    minutes = 10
+                    muted_until[chat_id] = time.time() + (minutes * 60)
+                    response_text = "🔇 Bot paused for 10 minutes"
+                
+                elif "resume bot" in text:
+                    if chat_id in muted_until:
+                        del muted_until[chat_id]
+                    response_text = "▶️ Bot resumed!"
+                
+                if response_text:
+                    send_telegram(chat_id, response_text)
+        
         except Exception as e:
-            print(f"Telegram error: {e}")
-        import time
-        time.sleep(5)
-
-def http_server():
-    print(f"Starting HTTP server on port {ALERT_PORT}")
-    HTTPServer(("0.0.0.0", ALERT_PORT), Handler).serve_forever()
+            print(f"Telegram polling error: {e}")
+        
+        time.sleep(2)
 
 def handle_sensor(payload):
     asset_id = payload.get("warehouse_id")
     if not asset_id:
         return
+    
+    latest_sensor[asset_id] = payload
+    
     temp = float(payload.get("temperature", 0))
     hum = float(payload.get("humidity", 0))
     stock = int(payload.get("stock", 0))
-    latest_sensor[asset_id] = payload
+    door_open = payload.get("door_open", False)
     
     state = "NORMAL"
     if temp > 40 or temp < -10:
@@ -205,98 +317,94 @@ def handle_sensor(payload):
     elif stock > 90:
         state = "OVERLOAD"
     
-    # Trend calculation
     last_vals = last_sensor_values.get(asset_id, {})
     temp_trend = ""
     if "temperature" in last_vals:
         diff = temp - last_vals["temperature"]
-        if diff > 0.1: temp_trend = "📈 rising"
-        elif diff < -0.1: temp_trend = "📉 falling"
-        else: temp_trend = "➡️ steady"
+        if diff > 0.1:
+            temp_trend = "📈 rising"
+        elif diff < -0.1:
+            temp_trend = "📉 falling"
+        else:
+            temp_trend = "➡️ stable"
     
     stock_trend = ""
     if "stock" in last_vals:
         diff = stock - last_vals["stock"]
-        if diff > 0: stock_trend = "📈 increasing"
-        elif diff < 0: stock_trend = "📉 decreasing"
-        else: stock_trend = "➡️ stable"
-
-    # Update last values
+        if diff > 0:
+            stock_trend = "📈 increasing"
+        elif diff < 0:
+            stock_trend = "📉 decreasing"
+        else:
+            stock_trend = "➡️ stable"
+    
     last_sensor_values[asset_id] = {"temperature": temp, "humidity": hum, "stock": stock}
-
-    # Rate limiting and suppression logic
+    
     now = time.time()
     last_time = last_alert_time.get(asset_id, 0)
     last_state = last_alert_state.get(asset_id, "NORMAL")
     manual_time = manual_command_times.get(asset_id, 0)
     
-    # Progress check: If we issued a command and the value is moving in right direction
-    if now - manual_time < 60: # Within a minute of a manual command
+    if now - manual_time < 60:
         improving = False
-        if temp < -10 and "rising" in temp_trend: improving = True
-        if temp > 40 and "falling" in temp_trend: improving = True
-        if stock > 90 and "decreasing" in stock_trend: improving = True
+        if temp < -10 and "rising" in temp_trend:
+            improving = True
+        if temp > 40 and "falling" in temp_trend:
+            improving = True
+        if stock > 90 and "decreasing" in stock_trend:
+            improving = True
         
         if improving:
             progress_msg = (
-                f"✅ PROGRESS UPDATE\n\n"
+                "✅ SITUATION IMPROVED\n\n"
                 f"📍 Warehouse: {asset_id}\n"
-                f"⚙️ Your action is working!\n"
-                f"🌡️ Temperature is {temp_trend}\n"
-                f"📦 Stock is {stock_trend}\n"
+                f"✅ State: NORMAL\n\n"
+                f"🌡️ Temperature: {temp:.1f}°C {temp_trend}\n"
+                f"📦 Stock: {stock}% {stock_trend}\n"
                 f"⏰ Time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
             )
-            # Only send progress once per command
-            if now - manual_time < 5: # Just started improving
-                 broadcast(progress_msg)
-                 manual_command_times[asset_id] = 0 # Reset so we don't spam progress
-            return # Suppress the main alert while improving
-
+            if now - manual_time < 5:
+                broadcast(progress_msg)
+                manual_command_times[asset_id] = 0
+            return
+    
     if state in ["CRITICAL", "OVERLOAD", "ANOMALY"]:
-        # Only alert if:
-        # 1. State has changed (e.g. NORMAL -> CRITICAL)
-        # 2. Enough time has passed since last alert of same state
         if state == last_state and (now - last_time) < ALERT_RATE_LIMIT:
             return
-
-        # Update tracking
+        
         last_alert_time[asset_id] = now
         last_alert_state[asset_id] = state
-
-        # Get humidity
-        door = "Open" if payload.get("door_open") else "Closed"
+        
+        door = "Open" if door_open else "Closed"
         timestamp = payload.get("timestamp", datetime.now(timezone.utc).timestamp())
         time_str = datetime.fromtimestamp(timestamp, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         
-        # Determine suggested action based on state
         actions = []
         if temp > 40:
-            actions.append("emergency_shutdown")
-            actions.append("fan")
-            actions.append("door_open") # Ventilation
+            actions.append("Turn on fan")
+            actions.append("Open door")
+            actions.append("Emergency shutdown")
         elif temp < -10:
-            actions.append("heater")
-            actions.append("door_close") # Insulation
+            actions.append("Turn on heater")
+            actions.append("Close door")
         elif hum > 90:
-            actions.append("dehumidifier")
-            actions.append("door_close")
+            actions.append("Turn on dehumidifier")
+            actions.append("Close door")
         elif stock > 90:
-            actions.append("pause_deliveries")
-            actions.append("restock")
-            actions.append("door_close") # Security
+            actions.append("Pause deliveries")
+            actions.append("Restock alert")
         
-        action_text = ", ".join(actions) if actions else "monitor"
+        action_text = "\n".join([f"  🔧 {a}" for a in actions]) if actions else "  Monitor closely"
         
-        # Create detailed alert message matching user's preferred format
         alert_msg = (
-            f"🚨 WAREHOUSE ALERT\n\n"
+            "🚨 WAREHOUSE ALERT\n\n"
             f"📍 Warehouse: {asset_id}\n"
             f"⚠️ State: {state}\n\n"
-            f"🌡️ Temperature: {temp:.1f}°C ({temp_trend})\n"
+            f"🌡️ Temperature: {temp:.1f}°C {temp_trend}\n"
             f"💧 Humidity: {hum:.1f}%\n"
-            f"📦 Stock: {stock}% ({stock_trend})\n"
+            f"📦 Stock: {stock}% {stock_trend}\n"
             f"🚪 Door: {door}\n\n"
-            f"🔧 Suggested Action: {action_text}\n"
+            f"🔧 Suggested Actions:\n{action_text}\n\n"
             f"⏰ Time: {time_str}"
         )
         
@@ -309,21 +417,20 @@ def handle_sensor(payload):
             "humidity": hum,
             "stock": stock,
             "message": alert_msg,
-            "actions": actions
+            "actions": actions,
         })
         broadcast(alert_msg)
     else:
-        # If state returned to normal, reset tracking and notify user
         if last_state != "NORMAL":
             msg = (
-                f"✅ SITUATION IMPROVED\n\n"
+                "✅ SITUATION IMPROVED\n\n"
                 f"📍 Warehouse: {asset_id}\n"
                 f"✅ State: NORMAL\n\n"
                 f"🌡️ Temperature: {temp:.1f}°C\n"
                 f"📦 Stock: {stock}%\n"
                 f"⏰ Time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}"
             )
-            print(f"INFO: {asset_id} returned to NORMAL")
+            print(f"{asset_id} returned to NORMAL")
             last_alert_state[asset_id] = "NORMAL"
             broadcast(msg)
 
@@ -332,6 +439,8 @@ def on_connect(client, userdata, flags, rc):
         print("MQTT connected")
         client.subscribe("assets/#")
         client.subscribe("system/device_status")
+    else:
+        print(f"MQTT connection failed: {rc}")
 
 def on_message(client, userdata, msg):
     try:
@@ -341,16 +450,31 @@ def on_message(client, userdata, msg):
         elif msg.topic.endswith("/events"):
             handle_event(payload)
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"MQTT message error: {e}")
+
+def http_server():
+    print(f"HTTP server starting on port {ALERT_PORT}")
+    HTTPServer(("0.0.0.0", ALERT_PORT), Handler).serve_forever()
 
 def main():
-    print("Alert Service starting")
+    print("Alert Service starting...")
     threading.Thread(target=http_server, daemon=True).start()
     threading.Thread(target=telegram_poll, daemon=True).start()
+    
     client = mqtt.Client(client_id="alert_service")
     client.on_connect = on_connect
     client.on_message = on_message
-    client.connect(MQTT_BROKER, MQTT_PORT, 60)
+    
+    connected = False
+    while not connected:
+        try:
+            client.connect(MQTT_BROKER, MQTT_PORT, 60)
+            connected = True
+            print("Connected to MQTT broker")
+        except Exception as e:
+            print(f"Waiting for MQTT broker... {e}")
+            time.sleep(2)
+    
     client.loop_forever()
 
 if __name__ == "__main__":

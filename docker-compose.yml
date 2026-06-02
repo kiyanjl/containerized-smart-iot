@@ -4,8 +4,8 @@ services:
     container_name: mqtt-broker
     restart: unless-stopped
     ports:
-      - "1883:1883"
-      - "9001:9001"
+      - "${MQTT_HOST_PORT:-1883}:1883"
+      - "${MQTT_WS_HOST_PORT:-19001}:9001"
     volumes:
       - ./mqtt-broker/mosquitto.conf:/mosquitto/config/mosquitto.conf
       - mqtt-data:/mosquitto/data
@@ -17,7 +17,7 @@ services:
     container_name: catalog-service
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "${CATALOG_HOST_PORT:-18080}:8080"
     volumes:
       - ./catalog-service/catalog.json:/app/catalog.json
     depends_on:
@@ -48,7 +48,7 @@ services:
     image: influxdb:2.7
     restart: unless-stopped
     ports:
-      - "8086:8086"
+      - "${INFLUXDB_HOST_PORT:-18086}:8086"
     volumes:
       - influxdb-data:/var/lib/influxdb2
     environment:
@@ -72,14 +72,12 @@ services:
     container_name: controller-service
     restart: unless-stopped
     ports:
-      - "8001:8001"
+      - "${CONTROLLER_HOST_PORT:-18001}:8001"
     environment:
       INFLUX_URL: http://influxdb:8086
       INFLUX_TOKEN: NnVSDg3Jxb8K1hpRyu8eMNCXf6Uix-T04fEti98mgN15sIjqn-qEWY8o72MLJwvVEZG1qG7ZD4cOlzL60Zyacg==
       INFLUX_ORG: smart-iot
       INFLUX_BUCKET: warehouse_metrics
-    volumes:
-      - ./controller-service/rules_cache.json:/app/rules_cache.json
     depends_on:
       mqtt-broker:
         condition: service_started
@@ -113,7 +111,7 @@ services:
     container_name: alert-service
     restart: unless-stopped
     ports:
-      - "5002:5002"
+      - "${ALERT_HOST_PORT:-15002}:5002"
     environment:
       MQTT_BROKER: mqtt-broker
       MQTT_PORT: 1883
@@ -184,7 +182,7 @@ services:
       INFLUX_ORG: smart-iot
       INFLUX_BUCKET: warehouse_metrics
       GRAFANA_PUBLIC_URL: http://localhost:${GRAFANA_PORT:-3100}
-      INFLUX_PUBLIC_URL: http://localhost:8086
+      INFLUX_PUBLIC_URL: http://localhost:${INFLUXDB_HOST_PORT:-18086}
     depends_on:
       controller-service:
         condition: service_healthy
