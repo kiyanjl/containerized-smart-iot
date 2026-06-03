@@ -33,44 +33,89 @@ The platform models three warehouse types (`warehouse_cold`, `warehouse_standard
 
 ```mermaid
 flowchart LR
-    %% Top Layer: Human Interface
-    Streamlit[Streamlit Dashboard] -->|REST GET /assets| Catalog[Catalog Service]
-    Streamlit -->|REST GET /status, /events, /state_history, /commands| Controller[Smart Controller]
+    %% Define styles first
+    classDef service fill:#e1f5ff,stroke:#333,stroke-width:2px
+    classDef storage fill:#fff4e1,stroke:#333,stroke-width:2px
+    classDef subgraph fill:#f9f9f9,stroke:#666,stroke-width:1px
+
+    %% ------------------------------
+    %% TOP LAYER: HUMAN INTERFACE
+    %% ------------------------------
+    subgraph HumanInterface
+        direction LR
+        Streamlit[Streamlit Dashboard]:::service
+        Telegram[Telegram Bot / Human Operator]:::service
+    end
+
+    %% ------------------------------
+    %% MIDDLE LAYER: SERVICES
+    %% ------------------------------
+    Catalog[Catalog Service]:::service
+    Simulator[Sensor Simulator]:::service
+    Broker[(MQTT Broker)]:::storage
+    Actuator[Actuator Service]:::service
+    Alert[Alert Service]:::service
+
+    %% ------------------------------
+    %% SUBGRAPH: SMART CONTROLLER
+    %% ------------------------------
+    subgraph SmartController
+        direction LR
+        Controller[Smart Controller]:::service
+        RuleEngine[Rule Engine\nClassifies Warehouse States]:::service
+        RulesCache[Rules Cache\nLocal Rule Store]:::storage
+        Resilience[Resilience Module\nMQTT Reconnect / Command Timeout / Retry Queue / Rule Sync]:::service
+    end
+
+    %% ------------------------------
+    %% BOTTOM LAYER: PERSISTENCE & VIZ
+    %% ------------------------------
+    Influx[(InfluxDB)]:::storage
+    Grafana[Grafana]:::service
+
+    %% ------------------------------
+    %% CONNECTIONS
+    %% ------------------------------
+
+    %% Streamlit connections
+    Streamlit -->|REST GET /assets| Catalog
+    Streamlit -->|REST GET /status, /events, /state_history, /commands| Controller
     Streamlit -->|REST POST /manual_command| Controller
-    Streamlit -->|REST GET /alerts, /status| Alert[Alert Service]
-    Telegram[Telegram Bot / Human Operator] -->|Commands| Alert
+    Streamlit -->|REST GET /alerts, /status| Alert
+
+    %% Telegram connections
+    Telegram -->|Commands| Alert
     Alert -->|Alerts| Telegram
 
-    %% Simulation & Config Layer
-    Simulator[Sensor Simulator] -->|REST GET /assets, /broker, /port| Catalog
-    Catalog -->|MQTT catalog/config_updated| Broker[(MQTT Broker)]
+    %% Simulator & Catalog connections
+    Simulator -->|REST GET /assets, /broker, /port| Catalog
+    Catalog -->|MQTT catalog/config_updated| Broker
     Simulator -->|MQTT assets/+/sensors| Broker
     Simulator -->|MQTT assets/+/events| Broker
     Simulator -->|MQTT assets/+/heartbeat| Broker
 
-    %% Intelligence Layer (Controller with sub-components!)
-    subgraph SmartController
-        Controller
-        RuleEngine[Rule Engine\nClassifies Warehouse States]
-        RulesCache[Rules Cache\nLocal Rule Store]
-        Resilience[Resilience Module\nMQTT Reconnect / Command Timeout / Retry Queue / Rule Sync]
-    end
-
-    Broker -->|MQTT assets/+/sensors, assets/+/events, assets/+/heartbeat, catalog/config_updated| Controller
+    %% Smart Controller internal connections
     Controller <-->|Load Rules / Sync| RulesCache
     Controller <-->|Evaluate Rules| RuleEngine
     Controller <-->|Manage Resilience| Resilience
+
+    %% Broker to/from Controller/Actuator
+    Broker -->|MQTT assets/+/sensors, assets/+/events, assets/+/heartbeat, catalog/config_updated| Controller
     Controller -->|MQTT assets/+/actuator, assets/+/events| Broker
-    Broker -->|MQTT assets/+/actuator| Actuator[Actuator Service]
+    Broker -->|MQTT assets/+/actuator| Actuator
     Actuator -->|MQTT assets/+/events confirmations| Broker
 
-    %% Alerts Layer
+    %% Broker to Alert
     Broker -->|MQTT assets/#, system/device_status| Alert
 
-    %% Persistence & Visualization Layer
-    Controller -->|write telemetry, events, device_health| Influx[(InfluxDB)]
+    %% Persistence & Viz
+    Controller -->|write telemetry, events, device_health| Influx
     Controller -->|query events/history for REST responses| Influx
-    Grafana[Grafana] -->|Flux queries| Influx
+    Grafana -->|Flux queries| Influx
+
+    %% Apply styles
+    class Streamlit,Telegram,Catalog,Simulator,Controller,RuleEngine,Resilience,Actuator,Alert,Grafana service
+    class Broker,Influx,RulesCache storage
 ```
 
 ### Key Architecture Features
