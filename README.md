@@ -33,28 +33,61 @@ The platform models three warehouse types (`warehouse_cold`, `warehouse_standard
 
 ```mermaid
 flowchart LR
+    %% Top Layer: Human Interface
     Streamlit[Streamlit Dashboard] -->|REST GET /assets| Catalog[Catalog Service]
     Streamlit -->|REST GET /status, /events, /state_history, /commands| Controller[Smart Controller]
     Streamlit -->|REST POST /manual_command| Controller
     Streamlit -->|REST GET /alerts, /status| Alert[Alert Service]
+    Telegram[Telegram Bot / Human Operator] -->|Commands| Alert
+    Alert -->|Alerts| Telegram
 
+    %% Simulation & Config Layer
     Simulator[Sensor Simulator] -->|REST GET /assets, /broker, /port| Catalog
     Catalog -->|MQTT catalog/config_updated| Broker[(MQTT Broker)]
     Simulator -->|MQTT assets/+/sensors| Broker
     Simulator -->|MQTT assets/+/events| Broker
     Simulator -->|MQTT assets/+/heartbeat| Broker
 
+    %% Intelligence Layer (Controller with sub-components!)
+    subgraph SmartController
+        Controller
+        RuleEngine[Rule Engine\nClassifies Warehouse States]
+        RulesCache[Rules Cache\nLocal Rule Store]
+        Resilience[Resilience Module\nMQTT Reconnect / Command Timeout / Retry Queue / Rule Sync]
+    end
+
     Broker -->|MQTT assets/+/sensors, assets/+/events, assets/+/heartbeat, catalog/config_updated| Controller
+    Controller <-->|Load Rules / Sync| RulesCache
+    Controller <-->|Evaluate Rules| RuleEngine
+    Controller <-->|Manage Resilience| Resilience
     Controller -->|MQTT assets/+/actuator, assets/+/events| Broker
     Broker -->|MQTT assets/+/actuator| Actuator[Actuator Service]
     Actuator -->|MQTT assets/+/events confirmations| Broker
-    Broker -->|MQTT assets/#, system/device_status| Alert
-    Alert --> Telegram[Telegram Bot / Human Operator]
 
-    Controller -->|write telemetry, events, health| Influx[(InfluxDB)]
+    %% Alerts Layer
+    Broker -->|MQTT assets/#, system/device_status| Alert
+
+    %% Persistence & Visualization Layer
+    Controller -->|write telemetry, events, device_health| Influx[(InfluxDB)]
     Controller -->|query events/history for REST responses| Influx
     Grafana[Grafana] -->|Flux queries| Influx
 ```
+
+### Key Architecture Features
+
+1. **Microservice Architecture**: Clear separation of concerns, each service has single responsibility
+2. **MQTT + REST Hybrid**:
+   - MQTT for real-time streams (sensors, events, commands, heartbeats)
+   - REST for configuration & human-facing UI
+3. **Closed-Loop Control**: Sense → Decide → Act → Verify (via actuator confirmations!)
+4. **Device Health Monitoring**: Controller tracks warehouse heartbeats and detects offline devices
+5. **Observability & Traceability**: All data (telemetry, events, health) stored historically in InfluxDB
+6. **Resilience Features**:
+   - MQTT auto reconnect
+   - Rule synchronization with Catalog
+   - Command timeout detection
+   - InfluxDB retry queue
+7. **Rules Cache**: Controller maintains local rule store for reliability if Catalog is unavailable
 
 Important diagram rule: Streamlit is not receiving pushed data through WebSocket or SSE. Streamlit polls REST endpoints when the page refreshes. Therefore the REST arrows point from Streamlit to Catalog, Controller, and Alert Service.
 
