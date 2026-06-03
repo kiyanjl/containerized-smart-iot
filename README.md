@@ -33,22 +33,18 @@ The platform models three warehouse types (`warehouse_cold`, `warehouse_standard
 
 ```mermaid
 flowchart LR
-    %% Define styles first
+    %% Define safe styles
     classDef service fill:#e1f5ff,stroke:#333,stroke-width:2px
     classDef storage fill:#fff4e1,stroke:#333,stroke-width:2px
-    classDef subgraph fill:#f9f9f9,stroke:#666,stroke-width:1px
 
     %% ------------------------------
-    %% TOP LAYER: HUMAN INTERFACE
+    %% HUMAN INTERFACE (TOP)
     %% ------------------------------
-    subgraph HumanInterface
-        direction LR
-        Streamlit[Streamlit Dashboard]:::service
-        Telegram[Telegram Bot / Human Operator]:::service
-    end
+    Streamlit[Streamlit Dashboard]:::service
+    Telegram[Telegram Bot / Human Operator]:::service
 
     %% ------------------------------
-    %% MIDDLE LAYER: SERVICES
+    %% CORE SERVICES
     %% ------------------------------
     Catalog[Catalog Service]:::service
     Simulator[Sensor Simulator]:::service
@@ -57,18 +53,18 @@ flowchart LR
     Alert[Alert Service]:::service
 
     %% ------------------------------
-    %% SUBGRAPH: SMART CONTROLLER
+    %% SMART CONTROLLER SUBGRAPH
     %% ------------------------------
     subgraph SmartController
         direction LR
         Controller[Smart Controller]:::service
         RuleEngine[Rule Engine\nClassifies Warehouse States]:::service
         RulesCache[Rules Cache\nLocal Rule Store]:::storage
-        Resilience[Resilience Module\nMQTT Reconnect / Command Timeout / Retry Queue / Rule Sync]:::service
+        Resilience[Resilience Module\nMQTT Reconnect / Timeout / Retry Queue / Rule Sync]:::service
     end
 
     %% ------------------------------
-    %% BOTTOM LAYER: PERSISTENCE & VIZ
+    %% PERSISTENCE & VIZ (BOTTOM)
     %% ------------------------------
     Influx[(InfluxDB)]:::storage
     Grafana[Grafana]:::service
@@ -77,29 +73,29 @@ flowchart LR
     %% CONNECTIONS
     %% ------------------------------
 
-    %% Streamlit connections
+    %% Streamlit
     Streamlit -->|REST GET /assets| Catalog
     Streamlit -->|REST GET /status, /events, /state_history, /commands| Controller
     Streamlit -->|REST POST /manual_command| Controller
     Streamlit -->|REST GET /alerts, /status| Alert
 
-    %% Telegram connections
+    %% Telegram
     Telegram -->|Commands| Alert
     Alert -->|Alerts| Telegram
 
-    %% Simulator & Catalog connections
+    %% Simulator & Catalog
     Simulator -->|REST GET /assets, /broker, /port| Catalog
     Catalog -->|MQTT catalog/config_updated| Broker
     Simulator -->|MQTT assets/+/sensors| Broker
     Simulator -->|MQTT assets/+/events| Broker
     Simulator -->|MQTT assets/+/heartbeat| Broker
 
-    %% Smart Controller internal connections
+    %% Smart Controller internal
     Controller <-->|Load Rules / Sync| RulesCache
     Controller <-->|Evaluate Rules| RuleEngine
     Controller <-->|Manage Resilience| Resilience
 
-    %% Broker to/from Controller/Actuator
+    %% Broker, Controller, Actuator
     Broker -->|MQTT assets/+/sensors, assets/+/events, assets/+/heartbeat, catalog/config_updated| Controller
     Controller -->|MQTT assets/+/actuator, assets/+/events| Broker
     Broker -->|MQTT assets/+/actuator| Actuator
