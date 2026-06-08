@@ -87,7 +87,6 @@ flowchart LR
     Simulator -->|REST GET /assets, /broker, /port| Catalog
     Catalog -->|MQTT PUB catalog/config_updated| Broker
     Broker -->|MQTT SUB catalog/config_updated| Controller
-    Broker -->|MQTT SUB catalog/config_updated| Simulator
 
     Simulator -->|MQTT PUB assets/+/sensors| Broker
     Broker -->|MQTT SUB assets/+/sensors| Controller
