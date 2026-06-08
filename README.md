@@ -52,6 +52,15 @@ flowchart LR
     Actuator[Actuator Service]:::service
     Alert[Alert Service]:::service
 
+
+    %% ------------------------------
+    %% PERSISTENCE & VIZ (BOTTOM)
+    %% ------------------------------
+    Influx[(InfluxDB)]:::storage
+    Grafana[Grafana]:::service
+
+
+
     %% ------------------------------
     %% SMART CONTROLLER SUBGRAPH
     %% ------------------------------
@@ -63,11 +72,7 @@ flowchart LR
         Resilience[Resilience Module\nMQTT Reconnect / Timeout / Retry Queue / Rule Sync]:::service
     end
 
-    %% ------------------------------
-    %% PERSISTENCE & VIZ (BOTTOM)
-    %% ------------------------------
-    Influx[(InfluxDB)]:::storage
-    Grafana[Grafana]:::service
+
 
     %% ------------------------------
     %% CONNECTIONS
