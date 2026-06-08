@@ -52,15 +52,6 @@ flowchart LR
     Actuator[Actuator Service]:::service
     Alert[Alert Service]:::service
 
-
-    %% ------------------------------
-    %% PERSISTENCE & VIZ (BOTTOM)
-    %% ------------------------------
-    Influx[(InfluxDB)]:::storage
-    Grafana[Grafana]:::service
-
-
-
     %% ------------------------------
     %% SMART CONTROLLER SUBGRAPH
     %% ------------------------------
@@ -72,7 +63,11 @@ flowchart LR
         Resilience[Resilience Module\nMQTT Reconnect / Timeout / Retry Queue / Rule Sync]:::service
     end
 
-
+    %% ------------------------------
+    %% PERSISTENCE & VIZ (BOTTOM)
+    %% ------------------------------
+    Influx[(InfluxDB)]:::storage
+    Grafana[Grafana]:::service
 
     %% ------------------------------
     %% CONNECTIONS
@@ -113,7 +108,9 @@ flowchart LR
     %% Actuation path (closed loop)
     Controller -->|MQTT PUB assets/+/actuator commands| Broker
     Broker -->|MQTT SUB assets/+/actuator| Actuator
-    Actuator -->|MQTT PUB assets/+/events| Broker
+    Broker -->|MQTT SUB assets/+/sensors edge safety| Actuator
+    Broker -->|MQTT SUB assets/+/events feedback| Actuator
+    Actuator -->|MQTT PUB assets/+/events confirmations| Broker
 
     %% Event consumers (who subscribes to confirmations/anomalies/manual events)
     Broker -->|MQTT SUB assets/+/events| Controller
@@ -126,8 +123,8 @@ flowchart LR
     Controller -->|MQTT PUB assets/+/events manual device| Broker
 
     %% Persistence & Viz
-    Controller -->|write telemetry, events, device_health| Influx
-    Controller -->|query events/history for REST responses| Influx
+    Controller -->|write telemetry events device_health| Influx
+    Influx -->|query events history for REST responses| Controller
     Grafana -->|Flux queries| Influx
 
     %% Apply styles
