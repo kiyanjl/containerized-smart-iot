@@ -95,10 +95,10 @@ flowchart LR
     Simulator -->|MQTT PUB assets/+/heartbeat| Broker
     Broker -->|MQTT SUB assets/+/heartbeat| Controller
 
-    Simulator -->|MQTT PUB assets/+/events (anomalies)| Broker
+    Simulator -->|MQTT PUB assets/+/events anomalies| Broker
 
     %% Sensor simulator Last Will (device offline) event
-    Simulator -->|MQTT PUB system/device_status (LWT)| Broker
+    Simulator -->|MQTT PUB system/device_status LWT| Broker
 
     %% Smart Controller internal
     Controller <-->|Load Rules / Sync| RulesCache
@@ -106,19 +106,19 @@ flowchart LR
     Controller <-->|Manage Resilience| Resilience
 
     %% Actuation path (closed loop)
-    Controller -->|MQTT PUB assets/+/actuator (commands)| Broker
+    Controller -->|MQTT PUB assets/+/actuator commands| Broker
     Broker -->|MQTT SUB assets/+/actuator| Actuator
-    Actuator -->|MQTT PUB assets/+/events (confirmations)| Broker
+    Actuator -->|MQTT PUB assets/+/events confirmations| Broker
 
     %% Event consumers (who subscribes to confirmations/anomalies/manual events)
     Broker -->|MQTT SUB assets/+/events| Controller
 
     %% Broker to Alert
-    Broker -->|MQTT SUB assets/# (sensors/events/heartbeats)| Alert
+    Broker -->|MQTT SUB assets/# sensors events heartbeats| Alert
     Broker -->|MQTT SUB system/device_status| Alert
 
     %% Controller-generated events (manual commands + device online/offline)
-    Controller -->|MQTT PUB assets/+/events (manual/device)| Broker
+    Controller -->|MQTT PUB assets/+/events manual device| Broker
 
     %% Persistence & Viz
     Controller -->|write telemetry, events, device_health| Influx
