@@ -108,7 +108,7 @@ flowchart LR
     %% Actuation path (closed loop)
     Controller -->|MQTT PUB assets/+/actuator commands| Broker
     Broker -->|MQTT SUB assets/+/actuator| Actuator
-    Actuator -->|MQTT PUB assets/+/events confirmations| Broker
+    Actuator -->|MQTT PUB assets/+/events| Broker
 
     %% Event consumers (who subscribes to confirmations/anomalies/manual events)
     Broker -->|MQTT SUB assets/+/events| Controller
