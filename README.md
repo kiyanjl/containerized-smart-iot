@@ -74,10 +74,10 @@ flowchart LR
     %% ------------------------------
 
     %% Streamlit
-    Streamlit -->|REST GET /assets| Catalog
-    Streamlit -->|REST GET /status, /events, /state_history, /commands| Controller
-    Streamlit -->|REST POST /manual_command| Controller
-    Streamlit -->|REST GET /alerts, /status| Alert
+    Streamlit -->|REST GET assets list| Catalog
+    Streamlit -->|REST GET status history| Controller
+    Streamlit -->|REST POST manual command| Controller
+    Streamlit -->|REST GET alerts status| Alert
 
     %% Telegram
     Telegram -->|Commands| Alert
@@ -85,19 +85,19 @@ flowchart LR
 
     %% Simulator & Catalog
     Simulator -->|REST GET /assets, /broker, /port| Catalog
-    Catalog -->|PUB config| Broker
-    Broker -->|SUB config| Controller
+    Catalog -->|MQTT PUB config updates| Broker
+    Broker -->|MQTT SUB config updates| Controller
 
-    Simulator -->|PUB sensors| Broker
-    Broker -->|SUB sensors| Controller
+    Simulator -->|MQTT PUB sensor data| Broker
+    Broker -->|MQTT SUB sensor data| Controller
 
-    Simulator -->|PUB heartbeat| Broker
-    Broker -->|SUB heartbeat| Controller
+    Simulator -->|MQTT PUB heartbeats| Broker
+    Broker -->|MQTT SUB heartbeats| Controller
 
-    Simulator -->|PUB events| Broker
+    Simulator -->|MQTT PUB anomaly events| Broker
 
     %% Sensor simulator Last Will (device offline) event
-    Simulator -->|PUB device_status| Broker
+    Simulator -->|MQTT PUB LWT offline| Broker
 
     %% Smart Controller internal
     Controller <-->|Load Rules / Sync| RulesCache
@@ -105,27 +105,27 @@ flowchart LR
     Controller <-->|Manage Resilience| Resilience
 
     %% Actuation path (closed loop)
-    Controller -->|PUB actuator| Broker
-    Broker -->|SUB actuator| Actuator
-    Broker -->|SUB actuator| Simulator
-    Broker -->|SUB sensors| Actuator
-    Broker -->|SUB events| Actuator
-    Actuator -->|PUB events| Broker
+    Controller -->|MQTT PUB actuator commands| Broker
+    Broker -->|MQTT SUB actuator commands| Actuator
+    Broker -->|MQTT SUB actuator state| Simulator
+    Broker -->|MQTT SUB sensor data| Actuator
+    Broker -->|MQTT SUB event feedback| Actuator
+    Actuator -->|MQTT PUB command events| Broker
 
     %% Event consumers (who subscribes to confirmations/anomalies/manual events)
-    Broker -->|SUB events| Controller
-    Broker -->|SUB events| Simulator
+    Broker -->|MQTT SUB event feedback| Controller
+    Broker -->|MQTT SUB event feedback| Simulator
 
     %% Broker to Alert
-    Broker -->|SUB assets| Alert
-    Broker -->|SUB device_status| Alert
+    Broker -->|MQTT SUB asset topics| Alert
+    Broker -->|MQTT SUB device status| Alert
 
     %% Controller-generated events (manual commands + device online/offline)
-    Controller -->|PUB events| Broker
+    Controller -->|MQTT PUB system events| Broker
 
     %% Persistence & Viz
-    Controller -->|write telemetry events device_health| Influx
-    Influx -->|query history for REST| Controller
+    Controller -->|Write telemetry events health| Influx
+    Influx -->|Read history for REST| Controller
     Grafana -->|Flux queries| Influx
 
     %% Apply styles
