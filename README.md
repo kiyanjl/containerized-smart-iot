@@ -94,10 +94,10 @@ flowchart LR
     Simulator -->|MQTT PUB assets/+/heartbeat| Broker
     Broker -->|MQTT SUB assets/+/heartbeat| Controller
 
-    Simulator -->|MQTT PUB assets/+/events anomalies| Broker
+    Simulator -->|MQTT PUB assets/+/events| Broker
 
     %% Sensor simulator Last Will (device offline) event
-    Simulator -->|MQTT PUB system/device_status LWT| Broker
+    Simulator -->|MQTT PUB system/device_status| Broker
 
     %% Smart Controller internal
     Controller <-->|Load Rules / Sync| RulesCache
@@ -105,27 +105,27 @@ flowchart LR
     Controller <-->|Manage Resilience| Resilience
 
     %% Actuation path (closed loop)
-    Controller -->|MQTT PUB assets/+/actuator commands| Broker
-    Broker -->|MQTT SUB assets/+/actuator execute commands| Actuator
-    Broker -->|MQTT SUB assets/+/actuator update simulated actuator state| Simulator
-    Broker -->|MQTT SUB assets/+/sensors telemetry used for local edge safety| Actuator
-    Broker -->|MQTT SUB assets/+/events shared event stream used for feedback tracking| Actuator
-    Actuator -->|MQTT PUB assets/+/events command confirmations| Broker
+    Controller -->|MQTT PUB assets/+/actuator| Broker
+    Broker -->|MQTT SUB assets/+/actuator| Actuator
+    Broker -->|MQTT SUB assets/+/actuator| Simulator
+    Broker -->|MQTT SUB assets/+/sensors| Actuator
+    Broker -->|MQTT SUB assets/+/events| Actuator
+    Actuator -->|MQTT PUB assets/+/events| Broker
 
     %% Event consumers (who subscribes to confirmations/anomalies/manual events)
-    Broker -->|MQTT SUB assets/+/events anomalies confirmations manual device| Controller
-    Broker -->|MQTT SUB assets/+/events confirmation observe| Simulator
+    Broker -->|MQTT SUB assets/+/events| Controller
+    Broker -->|MQTT SUB assets/+/events| Simulator
 
     %% Broker to Alert
-    Broker -->|MQTT SUB assets/# sensors events heartbeats| Alert
+    Broker -->|MQTT SUB assets/#| Alert
     Broker -->|MQTT SUB system/device_status| Alert
 
     %% Controller-generated events (manual commands + device online/offline)
-    Controller -->|MQTT PUB assets/+/events manual device| Broker
+    Controller -->|MQTT PUB assets/+/events| Broker
 
     %% Persistence & Viz
     Controller -->|write telemetry events device_health| Influx
-    Influx -->|query events history for REST responses| Controller
+    Influx -->|query history for REST| Controller
     Grafana -->|Flux queries| Influx
 
     %% Apply styles
