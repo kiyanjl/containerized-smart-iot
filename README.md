@@ -124,8 +124,8 @@ flowchart LR
     Controller -->|MQTT PUB manual device events| Broker
 
     %% Persistence & Viz
-    Controller -->|Write telemetry events health| Influx
-    Influx -->|Read history for REST| Controller
+    Controller -->|Write data| Influx
+    Influx -->|Read history| Controller
     Grafana -->|Flux queries| Influx
 
     %% Apply styles
