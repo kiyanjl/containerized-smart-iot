@@ -109,7 +109,7 @@ flowchart LR
     Broker -->|MQTT SUB actuator commands| Actuator
     Broker -->|MQTT SUB actuator updates| Simulator
     Broker -->|MQTT SUB sensor data| Actuator
-    Broker -->|MQTT SUB command confirmations| Actuator
+    Broker -->|MQTT SUB command | Actuator
     Actuator -->|MQTT PUB command confirmations| Broker
 
     %% Event consumers (who subscribes to confirmations/anomalies/manual events)
