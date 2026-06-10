@@ -106,15 +106,15 @@ flowchart LR
 
     %% Actuation path (closed loop)
     Controller -->|MQTT PUB assets/+/actuator commands| Broker
-    Broker -->|MQTT SUB assets/+/actuator| Actuator
-    Broker -->|MQTT SUB assets/+/actuator state update| Simulator
-    Broker -->|MQTT SUB assets/+/sensors edge safety| Actuator
-    Broker -->|MQTT SUB assets/+/events feedback| Actuator
-    Actuator -->|MQTT PUB assets/+/events confirmations| Broker
+    Broker -->|MQTT SUB assets/+/actuator execute commands| Actuator
+    Broker -->|MQTT SUB assets/+/actuator update simulated actuator state| Simulator
+    Broker -->|MQTT SUB assets/+/sensors telemetry used for local edge safety| Actuator
+    Broker -->|MQTT SUB assets/+/events shared event stream used for feedback tracking| Actuator
+    Actuator -->|MQTT PUB assets/+/events command confirmations| Broker
 
     %% Event consumers (who subscribes to confirmations/anomalies/manual events)
-    Broker -->|MQTT SUB assets/+/events| Controller
-    Broker -->|MQTT SUB assets/+/events| Simulator
+    Broker -->|MQTT SUB assets/+/events anomalies confirmations manual device| Controller
+    Broker -->|MQTT SUB assets/+/events confirmation observe| Simulator
 
     %% Broker to Alert
     Broker -->|MQTT SUB assets/# sensors events heartbeats| Alert
