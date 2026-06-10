@@ -107,21 +107,21 @@ flowchart LR
     %% Actuation path (closed loop)
     Controller -->|MQTT PUB actuator commands| Broker
     Broker -->|MQTT SUB actuator commands| Actuator
-    Broker -->|MQTT SUB actuator state| Simulator
+    Broker -->|MQTT SUB actuator updates| Simulator
     Broker -->|MQTT SUB sensor data| Actuator
-    Broker -->|MQTT SUB event feedback| Actuator
-    Actuator -->|MQTT PUB command events| Broker
+    Broker -->|MQTT SUB command confirmations| Actuator
+    Actuator -->|MQTT PUB command confirmations| Broker
 
     %% Event consumers (who subscribes to confirmations/anomalies/manual events)
-    Broker -->|MQTT SUB event feedback| Controller
-    Broker -->|MQTT SUB event feedback| Simulator
+    Broker -->|MQTT SUB warehouse events| Controller
+    Broker -->|MQTT SUB command confirmations| Simulator
 
     %% Broker to Alert
-    Broker -->|MQTT SUB asset topics| Alert
+    Broker -->|MQTT SUB all asset topics| Alert
     Broker -->|MQTT SUB device status| Alert
 
     %% Controller-generated events (manual commands + device online/offline)
-    Controller -->|MQTT PUB system events| Broker
+    Controller -->|MQTT PUB manual device events| Broker
 
     %% Persistence & Viz
     Controller -->|Write telemetry events health| Influx
